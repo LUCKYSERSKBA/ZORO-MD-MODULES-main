@@ -1,6 +1,7 @@
 // 🧹 Fix for ENOSPC / temp overflow in hosted panels
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 const consoleLogger = require('./lib/consoleLogger');
 
 // Redirect temp storage away from system /tmp
@@ -37,6 +38,45 @@ const axios = require('axios');
 const ffmpeg = require('fluent-ffmpeg');
 const { isSudo } = require('./lib/index');
 const { autoreadCommand, isAutoreadEnabled, handleAutoread } = require('./plugins/autoread');
+
+// 🌟 User-Specific Prefix MongoDB Schema & Functions (Session Isolated)
+const botSettingsSchema = new mongoose.Schema({
+    botId: { type: String, required: true, unique: true },
+    prefix: { type: String, default: '.' }
+});
+
+const BotSettings = mongoose.models.BotSettings || mongoose.model('BotSettings', botSettingsSchema);
+
+async function getBotPrefix(sock) {
+    try {
+        const botId = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : sock.user?.id;
+        const doc = await BotSettings.findOne({ botId });
+        return doc ? doc.prefix : '.';
+    } catch (e) {
+        return '.';
+    }
+}
+
+async function setBotPrefix(sock, newPrefix) {
+    try {
+        const botId = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : sock.user?.id;
+        return await BotSettings.findOneAndUpdate(
+            { botId },
+            { prefix: newPrefix },
+            { upsert: true, new: true }
+        );
+    } catch (e) {
+        console.error('Error setting prefix:', e);
+    }
+}
+
+// Global Allowed Prefixes List (Single & Double Emojis, Symbols without =)
+const globalAllowedPrefixes = [
+    ".", ",", "/", "!", "%", "<3", 
+    "🤍", "🎀", "🐱", "🥂", "🍒", "🐦‍🔥", "🏷️", 
+    "🌚", "🌷", "🪻", "🌿", "🍃",
+    "🌚🍃"
+];
 
 // Command imports
 const tagAllCommand = require('./plugins/tagall');
@@ -246,19 +286,31 @@ async function handleMessages(sock, messageUpdate, printLog) {
         const senderNumber = senderId.split('@')[0].split(':')[0];
         const senderHasOwnerAccess = (message.key.fromMe || senderNumber === settings.ownerNumber || senderIsSudo);
 
-        const userMessage = (
-            message.message?.conversation?.trim() ||
-            message.message?.extendedTextMessage?.text?.trim() ||
-            message.message?.imageMessage?.caption?.trim() ||
-            message.message?.videoMessage?.caption?.trim() ||
-            ''
-        ).toLowerCase().replace(/\.\s+/g, '.').trim();
-
         const rawText = message.message?.conversation?.trim() ||
             message.message?.extendedTextMessage?.text?.trim() ||
             message.message?.imageMessage?.caption?.trim() ||
             message.message?.videoMessage?.caption?.trim() ||
             '';
+
+        // 🌟 Fetch Custom Prefix for current bot session & merge with global prefixes
+        const currentPrefix = await getBotPrefix(sock);
+        const activePrefixes = Array.from(new Set([currentPrefix, ...globalAllowedPrefixes]));
+
+        // 🌟 Helper function to parse command dynamically supporting long prefixes/double emojis first
+        function parseCommand(text, prefixes) {
+            const sortedPrefixes = [...prefixes].sort((a, b) => b.length - a.length);
+            for (const prefix of sortedPrefixes) {
+                if (text.startsWith(prefix)) {
+                    const commandBody = text.slice(prefix.length).trim();
+                    const commandName = commandBody.split(' ')[0].toLowerCase();
+                    const args = commandBody.split(' ').slice(1);
+                    return { isCommand: true, prefixUsed: prefix, commandName, args, rawBody: commandBody };
+                }
+            }
+            return { isCommand: false };
+        }
+
+        const parsedCmd = parseCommand(rawText, activePrefixes);
 
         let senderName = 'Unknown User';
         let groupName = '';
@@ -273,22 +325,21 @@ async function handleMessages(sock, messageUpdate, printLog) {
         } catch (err) {}
 
         if (!message.key.fromMe) {
-            consoleLogger.logIncomingMessage(senderId, senderName, userMessage || rawText, isGroup, groupName);
+            consoleLogger.logIncomingMessage(senderId, senderName, rawText, isGroup, groupName);
         }
 
-        if (userMessage.startsWith('.')) {
-            const commandName = userMessage.split(' ')[0].substring(1);
-            consoleLogger.logCommandUsage(commandName, senderId, senderName, !isGroup, groupName);
+        if (parsedCmd.isCommand) {
+            consoleLogger.logCommandUsage(parsedCmd.commandName, senderId, senderName, !isGroup, groupName);
         }
 
         if (isGroup && !message.key.fromMe) {
-            const isDetectedAsBot = await handleAntiBotMessage(sock, chatId, message, senderId, userMessage);
+            const isDetectedAsBot = await handleAntiBotMessage(sock, chatId, message, senderId, rawText);
             if (isDetectedAsBot) return;
         }
 
-        if (!userMessage.startsWith('.')) {
+        if (!parsedCmd.isCommand) {
             await handleAutoReaction(sock, chatId, message, isGroup);
-            await handleAutotypingNew(sock, chatId, userMessage, isGroup);
+            await handleAutotypingNew(sock, chatId, rawText, isGroup);
         }
 
         try {
@@ -298,7 +349,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
             }
         } catch (error) {}
 
-        if (isBanned(senderId) && !userMessage.startsWith('.unban')) {
+        if (isBanned(senderId) && parsedCmd.commandName !== 'unban') {
             if (Math.random() < 0.1) {
                 await sock.sendMessage(chatId, {
                     text: '❌ You are banned from using the bot. Contact an admin to get unbanned.',
@@ -308,15 +359,15 @@ async function handleMessages(sock, messageUpdate, printLog) {
             return;
         }
 
-        if (/^[1-9]$/.test(userMessage) || userMessage.toLowerCase() === 'surrender') {
-            await handleTicTacToeMove(sock, chatId, senderId, userMessage);
+        if (/^[1-9]$/.test(rawText) || rawText.toLowerCase() === 'surrender') {
+            await handleTicTacToeMove(sock, chatId, senderId, rawText);
             return;
         }
 
         if (!message.key.fromMe) incrementMessageCount(chatId, senderId);
 
-        if (isGroup && userMessage) {
-            await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
+        if (isGroup && rawText) {
+            await handleBadwordDetection(sock, chatId, message, rawText, senderId);
             await Antilink(message, sock);
         }
 
@@ -337,23 +388,23 @@ async function handleMessages(sock, messageUpdate, printLog) {
             await handleAntiForward(sock, chatId, message, senderId);
         }
 
-        if (!userMessage.startsWith('.')) {
+        if (!parsedCmd.isCommand) {
             if (isGroup) {
-                await handleChatbotResponse(sock, chatId, message, userMessage, senderId);
+                await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                 await handleTagDetection(sock, chatId, message, senderId);
                 await handleMentionDetection(sock, chatId, message);
             }
             return;
         }
 
-        const adminCommands = ['.mute', '.unmute', '.ban', '.unban', '.promote', '.demote', '.kick', '.antilink', '.antitag', '.setgdesc', '.setgname', '.setgpp'];
-        const isAdminCommand = adminCommands.some(cmd => userMessage.startsWith(cmd));
+        const adminCommands = ['mute', 'unmute', 'ban', 'unban', 'promote', 'demote', 'kick', 'antilink', 'antitag', 'setgdesc', 'setgname', 'setgpp'];
+        const isAdminCommand = adminCommands.includes(parsedCmd.commandName);
 
-        const senderAdminOnlyCommands = ['.tagall', '.tagnotadmin', '.hidetag'];
-        const isSenderAdminOnlyCommand = senderAdminOnlyCommands.some(cmd => userMessage.startsWith(cmd));
+        const senderAdminOnlyCommands = ['tagall', 'tagnotadmin', 'hidetag'];
+        const isSenderAdminOnlyCommand = senderAdminOnlyCommands.includes(parsedCmd.commandName);
 
-        const ownerCommands = ['.mode', '.autostatus', '.antidelete', '.cleartmp', '.setpp', '.clearsession', '.areact', '.autoreact', '.autotyping', '.autoread', '.pmblocker', '.anticall'];
-        const isOwnerCommand = ownerCommands.some(cmd => userMessage.startsWith(cmd));
+        const ownerCommands = ['mode', 'autostatus', 'antidelete', 'cleartmp', 'setpp', 'clearsession', 'areact', 'autoreact', 'autotyping', 'autoread', 'pmblocker', 'anticall'];
+        const isOwnerCommand = ownerCommands.includes(parsedCmd.commandName);
 
         let isSenderAdmin = false;
         let isBotAdmin = false;
@@ -368,14 +419,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 return;
             }
 
-            if (
-                userMessage.startsWith('.mute') ||
-                userMessage === '.unmute' ||
-                userMessage.startsWith('.ban') ||
-                userMessage.startsWith('.unban') ||
-                userMessage.startsWith('.promote') ||
-                userMessage.startsWith('.demote')
-            ) {
+            if (['mute', 'unmute', 'ban', 'unban', 'promote', 'demote'].includes(parsedCmd.commandName)) {
                 if (!isSenderAdmin && !senderHasOwnerAccess) {
                     await sock.sendMessage(chatId, {
                         text: 'Sorry, only group admins can use this command.',
@@ -400,17 +444,50 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         let commandExecuted = false;
 
-        switch (true) {
-            // NEW: Added handling for user requested .sti and .m4a commands
-            case userMessage.startsWith('.sti'):
+        // 🌟 .setprefix Command Handler (Clean English, Double Emoji Support, Recommended Emojis & Symbol List)
+        if (parsedCmd.isCommand && parsedCmd.commandName === 'setprefix') {
+            const newPrefixArg = parsedCmd.args[0];
+            
+            if (!newPrefixArg) {
+                const suggestionMsg = 
+`✨ *Bot Prefix Configuration* ✨
+
+Current Prefix: \`${currentPrefix}\`
+
+To change your bot prefix, use the command followed by your desired symbol, single emoji, or double emoji combination.
+
+*Examples:*
+• \`.setprefix 🤍\`
+• \`.setprefix 🌚🍃\`
+
+*Recommended Emojis:*
+1. 🤍
+2. 🎀
+3. 🍃
+4. !
+
+*All Supported Symbol Prefixes:*
+. , / ! % <3`;
+
+                await sock.sendMessage(chatId, { text: suggestionMsg }, { quoted: message });
+                return;
+            }
+
+            await setBotPrefix(sock, newPrefixArg);
+            await sock.sendMessage(chatId, { text: `✅ Bot prefix successfully updated to: *${newPrefixArg}*\n\nYou can now use commands with your new prefix!` }, { quoted: message });
+            return;
+        }
+
+        switch (parsedCmd.commandName) {
+            case 'sti':
                 await stiCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.m4a'):
+            case 'm4a':
                 await m4aCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage === '.simage': {
+            case 'simage': {
                 const quotedMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
                 if (quotedMessage?.stickerMessage) {
                     await simageCommand(sock, quotedMessage, chatId);
@@ -420,14 +497,13 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 commandExecuted = true;
                 break;
             }
-            case userMessage.startsWith('.kick'):
+            case 'kick':
                 const mentionedJidListKick = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 await kickCommand(sock, chatId, senderId, mentionedJidListKick, message);
                 break;
-            case userMessage.startsWith('.mute'):
+            case 'mute':
                 {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const muteArg = parts[1];
+                    const muteArg = parsedCmd.args[0];
                     const muteDuration = muteArg !== undefined ? parseInt(muteArg, 10) : undefined;
                     if (muteArg !== undefined && (isNaN(muteDuration) || muteDuration <= 0)) {
                         await sock.sendMessage(chatId, { text: 'Please provide a valid number of minutes or use .mute with no number to mute immediately.', ...channelInfo }, { quoted: message });
@@ -436,62 +512,63 @@ async function handleMessages(sock, messageUpdate, printLog) {
                     }
                 }
                 break;
-            case userMessage === '.unmute':
+            case 'unmute':
                 await unmuteCommand(sock, chatId, senderId, message);
                 break;
-            case userMessage.startsWith('.ban'):
-                if (!isGroup) {
-                    if (!senderHasOwnerAccess) {
-                        await sock.sendMessage(chatId, { text: 'Only owner/sudo can use .ban in private chat.' }, { quoted: message });
-                        break;
-                    }
+            case 'ban':
+                if (!isGroup && !senderHasOwnerAccess) {
+                    await sock.sendMessage(chatId, { text: 'Only owner/sudo can use .ban in private chat.' }, { quoted: message });
+                    break;
                 }
                 await banCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.unban'):
-                if (!isGroup) {
-                    if (!senderHasOwnerAccess) {
-                        await sock.sendMessage(chatId, { text: 'Only owner/sudo can use .unban in private chat.' }, { quoted: message });
-                        break;
-                    }
+            case 'unban':
+                if (!isGroup && !senderHasOwnerAccess) {
+                    await sock.sendMessage(chatId, { text: 'Only owner/sudo can use .unban in private chat.' }, { quoted: message });
+                    break;
                 }
                 await unbanCommand(sock, chatId, message);
                 break;
-            case userMessage === '.help' || userMessage === '.menu' || userMessage === '.bot' || userMessage === '.list':
+            case 'help':
+            case 'menu':
+            case 'bot':
+            case 'list':
                 await helpCommand(sock, chatId, message, global.channelLink);
                 commandExecuted = true;
                 break;
-            case userMessage === '.sticker' || userMessage === '.s':
+            case 'sticker':
+            case 's':
                 await stickerCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage === '.pic':
+            case 'pic':
                 const quoted = message.message.extendedTextMessage?.contextInfo?.quotedMessage;
                 await picCommand(sock, chatId, message, quoted);
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.warnings'):
+            case 'warnings':
                 const mentionedJidListWarnings = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 await warningsCommand(sock, chatId, mentionedJidListWarnings, senderId);
                 break;
-            case userMessage.startsWith('.warn'):
+            case 'warn':
                 const mentionedJidListWarn = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 await warnCommand(sock, chatId, senderId, mentionedJidListWarn, message);
                 break;
-            case userMessage.startsWith('.tts'):
-                const text = userMessage.slice(4).trim();
+            case 'tts':
+                const text = parsedCmd.rawBody.slice(3).trim();
                 await ttsCommand(sock, chatId, text, message);
                 break;
-            case userMessage.startsWith('.delete') || userMessage.startsWith('.del'):
+            case 'delete':
+            case 'del':
                 await deleteCommand(sock, chatId, message, senderId);
                 break;
-            case userMessage.startsWith('.attp'):
+            case 'attp':
                 await attpCommand(sock, chatId, message);
                 break;
-            case userMessage === '.settings':
+            case 'settings':
                 await settingsCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.mode'):
+            case 'mode':
                 if (!senderHasOwnerAccess) {
                     await sock.sendMessage(chatId, { text: 'Only bot owner can use this command!', ...channelInfo }, { quoted: message });
                     return;
@@ -500,16 +577,15 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 try {
                     data = JSON.parse(fs.readFileSync('./data/messageCount.json'));
                 } catch (error) {
-                    console.error('Error reading access mode:', error);
                     await sock.sendMessage(chatId, { text: 'Failed to read bot mode status', ...channelInfo });
                     return;
                 }
 
-                const action = userMessage.split(' ')[1]?.toLowerCase();
+                const action = parsedCmd.args[0]?.toLowerCase();
                 if (!action) {
                     const currentMode = data.isPublic ? 'public' : 'private';
                     await sock.sendMessage(chatId, {
-                        text: `Current bot mode: *${currentMode}*\n\nUsage: .mode public/private\n\nExample:\n.mode public - Allow everyone to use bot\n.mode private - Restrict to owner only`,
+                        text: `Current bot mode: *${currentMode}*\n\nUsage: .mode public/private`,
                         ...channelInfo
                     }, { quoted: message });
                     return;
@@ -517,792 +593,552 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
                 if (action !== 'public' && action !== 'private') {
                     await sock.sendMessage(chatId, {
-                        text: 'Usage: .mode public/private\n\nExample:\n.mode public - Allow everyone to use bot\n.mode private - Restrict to owner only',
+                        text: 'Usage: .mode public/private',
                         ...channelInfo
                     }, { quoted: message });
                     return;
                 }
 
-                try {
-                    data.isPublic = action === 'public';
-                    fs.writeFileSync('./data/messageCount.json', JSON.stringify(data, null, 2));
-                    await sock.sendMessage(chatId, { text: `Bot is now in *${action}* mode`, ...channelInfo });
-                } catch (error) {
-                    console.error('Error updating access mode:', error);
-                    await sock.sendMessage(chatId, { text: 'Failed to update bot access mode', ...channelInfo });
-                }
+                data.isPublic = action === 'public';
+                fs.writeFileSync('./data/messageCount.json', JSON.stringify(data, null, 2));
+                await sock.sendMessage(chatId, { text: `Bot is now in *${action}* mode`, ...channelInfo });
                 break;
-            case userMessage.startsWith('.anticall'):
-                {
-                    const args = userMessage.split(' ').slice(1).join(' ');
-                    await anticallImproved(sock, chatId, message, args);
-                }
+            case 'anticall':
+                await anticallImproved(sock, chatId, message, parsedCmd.args.join(' '));
                 break;
-            case userMessage.startsWith('.pmblocker'):
-                {
-                    const args = userMessage.split(' ').slice(1).join(' ');
-                    await pmblockerImproved(sock, chatId, message, args);
-                }
+            case 'pmblocker':
+                await pmblockerImproved(sock, chatId, message, parsedCmd.args.join(' '));
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.approve'):
-                const approveArgs = userMessage.slice(8).trim();
-                await approveCommand(sock, chatId, message, approveArgs, senderId);
+            case 'approve':
+                await approveCommand(sock, chatId, message, parsedCmd.args.join(' '), senderId);
                 break;
-            case userMessage.startsWith('.disapprove'):
-                const disapproveArgs = userMessage.slice(11).trim();
-                await disapproveCommand(sock, chatId, message, disapproveArgs, senderId);
+            case 'disapprove':
+                await disapproveCommand(sock, chatId, message, parsedCmd.args.join(' '), senderId);
                 break;
-            case userMessage === '.getgroupp':
+            case 'getgroupp':
                 await getGroupPPCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.getpp'):
+            case 'getpp':
                 await getPPCommand(sock, chatId, message);
                 break;
-            case userMessage === '.groupid':
+            case 'groupid':
                 await groupIdCommand(sock, chatId, message);
                 break;
-            case userMessage === '.close':
+            case 'close':
                 await closeGroupCommand(sock, chatId, message);
                 break;
-            case userMessage === '.open':
+            case 'open':
                 await openGroupCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.antisticker'):
-                const antistickerArgs = userMessage.slice(12).trim();
-                await antistickerCommand(sock, chatId, message, antistickerArgs);
+            case 'antisticker':
+                await antistickerCommand(sock, chatId, message, parsedCmd.args.join(' '));
                 break;
-            case userMessage.startsWith('.antibot'):
-                const antibotArgs = userMessage.slice(8).trim();
-                await antibotCommand(sock, chatId, message, antibotArgs);
+            case 'antibot':
+                await antibotCommand(sock, chatId, message, parsedCmd.args.join(' '));
                 break;
-            case userMessage.startsWith('.antiforward'):
-                const antiforwardArgs = userMessage.slice(12).trim();
-                await antiforwardCommand(sock, chatId, message, antiforwardArgs);
+            case 'antiforward':
+                await antiforwardCommand(sock, chatId, message, parsedCmd.args.join(' '));
                 break;
-            case userMessage === '.toaudio':
+            case 'toaudio':
                 await toAudioCommand(sock, chatId, message);
                 break;
-            case userMessage === '.volvideo':
+            case 'volvideo':
                 await volvideoCommand(sock, chatId, message);
                 break;
-            case userMessage === '.toviewonce':
+            case 'toviewonce':
                 await toViewOnceCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.editcaption'):
-                const editcaptionArgs = rawText.slice(12).trim();
-                await editCaptionCommand(sock, chatId, message, editcaptionArgs);
+            case 'editcaption':
+                await editCaptionCommand(sock, chatId, message, rawText.slice(parsedCmd.prefixUsed.length + 11).trim());
                 break;
-            case userMessage === '.block':
+            case 'block':
                 await blockCommand(sock, chatId, message);
                 break;
-            case userMessage === '.unblockall':
+            case 'unblockall':
                 await unblockAllCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.autoreaction'):
-                const autoreactionArgs = userMessage.slice(13).trim();
-                await autoreactionCommand(sock, chatId, message, autoreactionArgs);
+            case 'autoreaction':
+                await autoreactionCommand(sock, chatId, message, parsedCmd.args.join(' '));
                 break;
-            case userMessage === '.owner':
+            case 'owner':
                 await ownerCommand(sock, chatId);
                 break;
-            case userMessage === '.realowner':
+            case 'realowner':
                 await realownerCommand(sock, chatId, message);
                 break;
-            case userMessage === '.tagall':
+            case 'tagall':
                 await tagAllCommand(sock, chatId, senderId, message);
                 break;
-            case userMessage === '.tagnotadmin':
+            case 'tagnotadmin':
                 await tagNotAdminCommand(sock, chatId, senderId, message);
                 break;
-            case userMessage.startsWith('.hidetag'):
+            case 'hidetag':
                 {
-                    const messageText = rawText.slice(8).trim();
+                    const messageText = rawText.slice(parsedCmd.prefixUsed.length + 7).trim();
                     const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
                     await hideTagCommand(sock, chatId, senderId, messageText, replyMessage, message);
                 }
                 break;
-            case userMessage.startsWith('.tag'):
-                const messageText = rawText.slice(4).trim();
-                const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
-                await tagCommand(sock, chatId, senderId, messageText, replyMessage, message);
+            case 'tag':
+                {
+                    const messageText = rawText.slice(parsedCmd.prefixUsed.length + 3).trim();
+                    const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
+                    await tagCommand(sock, chatId, senderId, messageText, replyMessage, message);
+                }
                 break;
-            case userMessage.startsWith('.antilink'):
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.', ...channelInfo }, { quoted: message });
+            case 'antilink':
+                if (!isGroup || !isBotAdmin) {
+                    await sock.sendMessage(chatId, { text: 'This command requires group & bot admin privileges.', ...channelInfo }, { quoted: message });
                     return;
                 }
-                if (!isBotAdmin) {
-                    await sock.sendMessage(chatId, { text: 'Please make the bot an admin first.', ...channelInfo }, { quoted: message });
-                    return;
-                }
-                await handleAntilinkCommand(sock, chatId, userMessage, senderId, isSenderAdmin, message);
+                await handleAntilinkCommand(sock, chatId, rawText, senderId, isSenderAdmin, message);
                 break;
-            case userMessage.startsWith('.antitag'):
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.', ...channelInfo }, { quoted: message });
+            case 'antitag':
+                if (!isGroup || !isBotAdmin) {
+                    await sock.sendMessage(chatId, { text: 'This command requires group & bot admin privileges.', ...channelInfo }, { quoted: message });
                     return;
                 }
-                if (!isBotAdmin) {
-                    await sock.sendMessage(chatId, { text: 'Please make the bot an admin first.', ...channelInfo }, { quoted: message });
-                    return;
-                }
-                await handleAntitagCommand(sock, chatId, userMessage, senderId, isSenderAdmin, message);
+                await handleAntitagCommand(sock, chatId, rawText, senderId, isSenderAdmin, message);
                 break;
-            case userMessage === '.bass':
+            case 'bass':
                 await bassCommand(sock, message, chatId);
                 break;
-            case userMessage === '.blow':
+            case 'blow':
                 await blowCommand(sock, message, chatId);
                 break;
-            case userMessage === '.deep':
+            case 'deep':
                 await deepCommand(sock, message, chatId);
                 break;
-            case userMessage === '.errape':
+            case 'errape':
                 await errapeCommand(sock, message, chatId);
                 break;
-            case userMessage === '.robot':
+            case 'robot':
                 await robotCommand(sock, message, chatId);
                 break;
-            case userMessage === '.meme':
+            case 'meme':
                 await memeCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.img'):
+            case 'img':
                 await imgCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.pinterestimg'):
+            case 'pinterestimg':
                 await pinterestImgCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.bingimg'):
+            case 'bingimg':
                 await bingImgCommand(sock, chatId, message);
                 break;
-            case userMessage === '.joke':
+            case 'joke':
                 await jokeCommand(sock, chatId, message);
                 break;
-            case userMessage === '.quote':
+            case 'quote':
                 await quoteCommand(sock, chatId, message);
                 break;
-            case userMessage === '.fact':
+            case 'fact':
                 await factCommand(sock, chatId, message, message);
                 break;
-            case userMessage.startsWith('.solve'):
-                const mathExpression = userMessage.slice(6).trim();
-                await solveCommand(sock, chatId, message, mathExpression);
+            case 'solve':
+                await solveCommand(sock, chatId, message, parsedCmd.rawBody.slice(5).trim());
                 break;
-            case userMessage.startsWith('.age'):
-                const birthYear = userMessage.slice(4).trim();
-                await ageCommand(sock, chatId, message, birthYear);
+            case 'age':
+                await ageCommand(sock, chatId, message, parsedCmd.args[0]);
                 break;
-            case userMessage.startsWith('.fliptext'):
-                const textToFlip = userMessage.split(' ').slice(1);
-                await fliptextCommand(sock, chatId, message, textToFlip);
+            case 'fliptext':
+                await fliptextCommand(sock, chatId, message, parsedCmd.args);
                 break;
-            case userMessage.startsWith('.setbotfont'):
-                const fontArgs = userMessage.split(' ').slice(1);
-                await setbotfontCommand(sock, chatId, message, fontArgs, senderId, senderIsSudo);
+            case 'setbotfont':
+                await setbotfontCommand(sock, chatId, message, parsedCmd.args, senderId, senderIsSudo);
                 break;
-            case userMessage.startsWith('.brat'):
-                const bratText = rawText.slice(5).trim();
-                await bratCommand(sock, chatId, message, bratText);
+            case 'brat':
+                await bratCommand(sock, chatId, message, rawText.slice(parsedCmd.prefixUsed.length + 4).trim());
                 break;
-            case userMessage.startsWith('.textsticker') || userMessage.startsWith('.text2sticker'):
-                const textStickerText = rawText.slice(userMessage.startsWith('.textsticker') ? 12 : 13).trim();
-                await textstickerCommand(sock, chatId, message, textStickerText);
+            case 'textsticker':
+            case 'text2sticker':
+                await textstickerCommand(sock, chatId, message, rawText.slice(parsedCmd.prefixUsed.length + (parsedCmd.commandName === 'textsticker' ? 11 : 12)).trim());
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.weather'):
-                const city = userMessage.slice(9).trim();
-                if (city) {
-                    await weatherCommand(sock, chatId, message, city);
-                } else {
-                    await sock.sendMessage(chatId, { text: 'Please specify a city, e.g., .weather London', ...channelInfo }, { quoted: message });
-                }
+            case 'weather':
+                const city = parsedCmd.args.join(' ');
+                if (city) await weatherCommand(sock, chatId, message, city);
+                else await sock.sendMessage(chatId, { text: 'Please specify a city, e.g., .weather London', ...channelInfo }, { quoted: message });
                 break;
-            case userMessage === '.news':
+            case 'news':
                 await newsCommand(sock, chatId);
                 break;
-            case userMessage.startsWith('.ttt') || userMessage.startsWith('.tictactoe'):
-                const tttText = userMessage.split(' ').slice(1).join(' ');
-                await tictactoeCommand(sock, chatId, senderId, tttText);
+            case 'ttt':
+            case 'tictactoe':
+                await tictactoeCommand(sock, chatId, senderId, parsedCmd.args.join(' '));
                 break;
-            case userMessage.startsWith('.move'):
-                const position = parseInt(userMessage.split(' ')[1]);
-                if (isNaN(position)) {
-                    await sock.sendMessage(chatId, { text: 'Please provide a valid position number for Tic-Tac-Toe move.', ...channelInfo }, { quoted: message });
-                } else {
-                    tictactoeMove(sock, chatId, senderId, position);
-                }
+            case 'move':
+                const pos = parseInt(parsedCmd.args[0]);
+                if (isNaN(pos)) await sock.sendMessage(chatId, { text: 'Provide valid position.', ...channelInfo }, { quoted: message });
+                else tictactoeMove(sock, chatId, senderId, pos);
                 break;
-            case userMessage === '.topmembers':
+            case 'topmembers':
                 topMembers(sock, chatId, isGroup);
                 break;
-            case userMessage.startsWith('.hangman'):
+            case 'hangman':
                 startHangman(sock, chatId);
                 break;
-            case userMessage.startsWith('.guess'):
-                const guessedLetter = userMessage.split(' ')[1];
-                if (guessedLetter) {
-                    guessLetter(sock, chatId, guessedLetter);
-                } else {
-                    sock.sendMessage(chatId, { text: 'Please guess a letter using .guess <letter>', ...channelInfo }, { quoted: message });
-                }
+            case 'guess':
+                if (parsedCmd.args[0]) guessLetter(sock, chatId, parsedCmd.args[0]);
                 break;
-            case userMessage.startsWith('.trivia'):
+            case 'trivia':
                 startTrivia(sock, chatId);
                 break;
-            case userMessage.startsWith('.answer'):
-                const answer = userMessage.split(' ').slice(1).join(' ');
-                if (answer) {
-                    answerTrivia(sock, chatId, answer);
-                } else {
-                    sock.sendMessage(chatId, { text: 'Please provide an answer using .answer <answer>', ...channelInfo }, { quoted: message });
-                }
+            case 'answer':
+                if (parsedCmd.args.length) answerTrivia(sock, chatId, parsedCmd.args.join(' '));
                 break;
-            case userMessage.startsWith('.compliment'):
+            case 'compliment':
                 await complimentCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.insult'):
+            case 'insult':
                 await insultCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.8ball'):
-                const question = userMessage.split(' ').slice(1).join(' ');
-                await eightBallCommand(sock, chatId, question);
+            case '8ball':
+                await eightBallCommand(sock, chatId, parsedCmd.args.join(' '));
                 break;
-            case userMessage.startsWith('.lyrics'):
-                const songTitle = userMessage.split(' ').slice(1).join(' ');
-                await lyricsCommand(sock, chatId, songTitle, message);
+            case 'lyrics':
+                await lyricsCommand(sock, chatId, parsedCmd.args.join(' '), message);
                 break;
-            case userMessage.startsWith('.simp'):
-                const quotedMsg = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-                const mentionedJid = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                await simpCommand(sock, chatId, quotedMsg, mentionedJid, senderId);
+            case 'simp':
+                await simpCommand(sock, chatId, message.message?.extendedTextMessage?.contextInfo?.quotedMessage, message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [], senderId);
                 break;
-            case userMessage.startsWith('.stupid') || userMessage.startsWith('.itssostupid') || userMessage.startsWith('.iss'):
-                const stupidQuotedMsg = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-                const stupidMentionedJid = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                const stupidArgs = userMessage.split(' ').slice(1);
-                await stupidCommand(sock, chatId, stupidQuotedMsg, stupidMentionedJid, senderId, stupidArgs);
+            case 'stupid':
+            case 'itssostupid':
+            case 'iss':
+                await stupidCommand(sock, chatId, message.message?.extendedTextMessage?.contextInfo?.quotedMessage, message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [], senderId, parsedCmd.args);
                 break;
-            case userMessage === '.dare':
+            case 'dare':
                 await dareCommand(sock, chatId, message);
                 break;
-            case userMessage === '.truth':
+            case 'truth':
                 await truthCommand(sock, chatId, message);
                 break;
-            case userMessage === '.clear':
+            case 'clear':
                 if (isGroup) await clearCommand(sock, chatId, senderId, message);
                 break;
-            case userMessage.startsWith('.promote'):
-                const mentionedJidListPromote = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                await promoteCommand(sock, chatId, mentionedJidListPromote, message);
+            case 'promote':
+                await promoteCommand(sock, chatId, message.message.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
                 break;
-            case userMessage.startsWith('.demote'):
-                const mentionedJidListDemote = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                await demoteCommand(sock, chatId, mentionedJidListDemote, message);
+            case 'demote':
+                await demoteCommand(sock, chatId, message.message.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
                 break;
-            case userMessage === '.ping':
+            case 'ping':
                 await pingCommand(sock, chatId, message);
                 break;
-            case userMessage === '.alive':
+            case 'alive':
                 await aliveCommand(sock, chatId, message);
                 break;
-            case userMessage === '.saymyname':
+            case 'saymyname':
                 await sayMyNameCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.sad') || userMessage.startsWith('.happy') || userMessage.startsWith('.angry'):
+            case 'sad':
+            case 'happy':
+            case 'angry':
                 await animEditCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.mention '):
-                {
-                    const args = userMessage.split(' ').slice(1).join(' ');
-                    await mentionToggleCommand(sock, chatId, message, args, senderHasOwnerAccess);
-                }
+            case 'mention':
+                await mentionToggleCommand(sock, chatId, message, parsedCmd.args.join(' '), senderHasOwnerAccess);
                 break;
-            case userMessage === '.setmention':
-                {
-                    await setMentionCommand(sock, chatId, message, senderHasOwnerAccess);
-                }
+            case 'setmention':
+                await setMentionCommand(sock, chatId, message, senderHasOwnerAccess);
                 break;
-            case userMessage.startsWith('.blur'):
-                const blurQuotedMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-                await blurCommand(sock, chatId, message, blurQuotedMessage);
+            case 'blur':
+                await blurCommand(sock, chatId, message, message.message?.extendedTextMessage?.contextInfo?.quotedMessage);
                 break;
-            case userMessage.startsWith('.welcome'):
-                if (isGroup) {
-                    if (!isSenderAdmin) {
-                        const adminStatus = await isAdmin(sock, chatId, senderId);
-                        isSenderAdmin = adminStatus.isSenderAdmin;
-                    }
-
-                    if (isSenderAdmin || senderHasOwnerAccess) {
-                        await welcomeCommand(sock, chatId, message);
-                    } else {
-                        await sock.sendMessage(chatId, { text: 'Sorry, only group admins can use this command.', ...channelInfo }, { quoted: message });
-                    }
-                } else {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.', ...channelInfo }, { quoted: message });
-                }
+            case 'welcome':
+                if (isGroup) await welcomeCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.goodbye'):
-                if (isGroup) {
-                    if (!isSenderAdmin) {
-                        const adminStatus = await isAdmin(sock, chatId, senderId);
-                        isSenderAdmin = adminStatus.isSenderAdmin;
-                    }
-
-                    if (isSenderAdmin || senderHasOwnerAccess) {
-                        await goodbyeCommand(sock, chatId, message);
-                    } else {
-                        await sock.sendMessage(chatId, { text: 'Sorry, only group admins can use this command.', ...channelInfo }, { quoted: message });
-                    }
-                } else {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.', ...channelInfo }, { quoted: message });
-                }
+            case 'goodbye':
+                if (isGroup) await goodbyeCommand(sock, chatId, message);
                 break;
-            case userMessage === '.git':
-            case userMessage === '.github':
-            case userMessage === '.sc':
-            case userMessage === '.script':
-            case userMessage === '.repo':
+            case 'git':
+            case 'github':
+            case 'sc':
+            case 'script':
+            case 'repo':
                 await githubCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.antibadword'):
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.', ...channelInfo }, { quoted: message });
-                    return;
-                }
-
-                const adminStatus = await isAdmin(sock, chatId, senderId);
-                isSenderAdmin = adminStatus.isSenderAdmin;
-                isBotAdmin = adminStatus.isBotAdmin;
-
-                if (!isBotAdmin) {
-                    await sock.sendMessage(chatId, { text: '*Bot must be admin to use this feature*', ...channelInfo }, { quoted: message });
-                    return;
-                }
-
-                await antibadwordCommand(sock, chatId, message, senderId, isSenderAdmin);
+            case 'antibadword':
+                if (isGroup) await antibadwordCommand(sock, chatId, message, senderId, isSenderAdmin);
                 break;
-            case userMessage.startsWith('.chatbot'):
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups.', ...channelInfo }, { quoted: message });
-                    return;
-                }
-
-                const chatbotAdminStatus = await isAdmin(sock, chatId, senderId);
-                if (!chatbotAdminStatus.isSenderAdmin && !senderHasOwnerAccess) {
-                    await sock.sendMessage(chatId, { text: '*Only admins or bot owner can use this command*', ...channelInfo }, { quoted: message });
-                    return;
-                }
-
-                const match = userMessage.slice(8).trim();
-                await handleChatbotCommand(sock, chatId, message, match);
+            case 'chatbot':
+                if (isGroup) await handleChatbotCommand(sock, chatId, message, parsedCmd.rawBody.slice(7).trim());
                 break;
-            case userMessage.startsWith('.take') || userMessage.startsWith('.steal'):
-                {
-                    const isSteal = userMessage.startsWith('.steal');
-                    const sliceLen = isSteal ? 6 : 5;
-                    const takeArgs = rawText.slice(sliceLen).trim().split(' ');
-                    await takeCommand(sock, chatId, message, takeArgs);
-                }
+            case 'take':
+            case 'steal':
+                await takeCommand(sock, chatId, message, parsedCmd.args);
                 break;
-            case userMessage === '.flirt':
+            case 'flirt':
                 await flirtCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.character'):
+            case 'character':
                 await characterCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.waste'):
+            case 'waste':
                 await wastedCommand(sock, chatId, message);
                 break;
-            case userMessage === '.ship':
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups!', ...channelInfo }, { quoted: message });
-                    return;
-                }
-                await shipCommand(sock, chatId, message);
+            case 'ship':
+                if (isGroup) await shipCommand(sock, chatId, message);
                 break;
-            case userMessage === '.groupinfo' || userMessage === '.infogp' || userMessage === '.infogrupo':
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups!', ...channelInfo }, { quoted: message });
-                    return;
-                }
-                await groupInfoCommand(sock, chatId, message);
+            case 'groupinfo':
+            case 'infogp':
+            case 'infogrupo':
+                if (isGroup) await groupInfoCommand(sock, chatId, message);
                 break;
-            case userMessage === '.resetlink' || userMessage === '.revoke' || userMessage === '.anularlink':
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups!', ...channelInfo }, { quoted: message });
-                    return;
-                }
-                await resetlinkCommand(sock, chatId, senderId);
+            case 'resetlink':
+            case 'revoke':
+            case 'anularlink':
+                if (isGroup) await resetlinkCommand(sock, chatId, senderId);
                 break;
-            case userMessage === '.staff' || userMessage === '.admins' || userMessage === '.listadmin':
-                if (!isGroup) {
-                    await sock.sendMessage(chatId, { text: 'This command can only be used in groups!', ...channelInfo }, { quoted: message });
-                    return;
-                }
-                await staffCommand(sock, chatId, message);
+            case 'staff':
+            case 'admins':
+            case 'listadmin':
+                if (isGroup) await staffCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.tourl') || userMessage.startsWith('.url'):
+            case 'tourl':
+            case 'url':
                 await urlCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.emojimix') || userMessage.startsWith('.emix'):
+            case 'emojimix':
+            case 'emix':
                 await emojimixCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.tg') || userMessage.startsWith('.stickertelegram') || userMessage.startsWith('.tgsticker') || userMessage.startsWith('.telesticker'):
+            case 'tg':
+            case 'stickertelegram':
+            case 'tgsticker':
+            case 'telesticker':
                 await stickerTelegramCommand(sock, chatId, message);
                 break;
-            case userMessage === '.vv':
+            case 'vv':
                 await viewOnceCommand(sock, chatId, message);
                 break;
-            case userMessage === '.clearsession' || userMessage === '.clearsesi':
+            case 'clearsession':
+            case 'clearsesi':
                 await clearSessionCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.autostatus'):
-                const autoStatusArgs = userMessage.split(' ').slice(1);
-                await autoStatusCommand(sock, chatId, message, autoStatusArgs);
+            case 'autostatus':
+                await autoStatusCommand(sock, chatId, message, parsedCmd.args);
                 break;
-            case userMessage.startsWith('.metallic'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'metallic');
+            case 'metallic':
+            case 'ice':
+            case 'snow':
+            case 'impressive':
+            case 'matrix':
+            case 'light':
+            case 'neon':
+            case 'devil':
+            case 'purple':
+            case 'thunder':
+            case 'leaves':
+            case '1917':
+            case 'arena':
+            case 'hacker':
+            case 'sand':
+            case 'blackpink':
+            case 'glitch':
+            case 'fire':
+                await textmakerCommand(sock, chatId, message, rawText, parsedCmd.commandName);
                 break;
-            case userMessage.startsWith('.ice'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'ice');
+            case 'antidelete':
+                await handleAntideleteCommand(sock, chatId, message, parsedCmd.rawBody.slice(10).trim());
                 break;
-            case userMessage.startsWith('.snow'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'snow');
-                break;
-            case userMessage.startsWith('.impressive'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'impressive');
-                break;
-            case userMessage.startsWith('.matrix'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'matrix');
-                break;
-            case userMessage.startsWith('.light'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'light');
-                break;
-            case userMessage.startsWith('.neon'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'neon');
-                break;
-            case userMessage.startsWith('.devil'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'devil');
-                break;
-            case userMessage.startsWith('.purple'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'purple');
-                break;
-            case userMessage.startsWith('.thunder'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'thunder');
-                break;
-            case userMessage.startsWith('.leaves'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'leaves');
-                break;
-            case userMessage.startsWith('.1917'):
-                await textmakerCommand(sock, chatId, message, userMessage, '1917');
-                break;
-            case userMessage.startsWith('.arena'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'arena');
-                break;
-            case userMessage.startsWith('.hacker'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'hacker');
-                break;
-            case userMessage.startsWith('.sand'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'sand');
-                break;
-            case userMessage.startsWith('.blackpink'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'blackpink');
-                break;
-            case userMessage.startsWith('.glitch'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'glitch');
-                break;
-            case userMessage.startsWith('.fire'):
-                await textmakerCommand(sock, chatId, message, userMessage, 'fire');
-                break;
-            case userMessage.startsWith('.antidelete'):
-                const antideleteMatch = userMessage.slice(11).trim();
-                await handleAntideleteCommand(sock, chatId, message, antideleteMatch);
-                break;
-            case userMessage === '.surrender':
+            case 'surrender':
                 await handleTicTacToeMove(sock, chatId, senderId, 'surrender');
                 break;
-            case userMessage === '.cleartmp':
+            case 'cleartmp':
                 await clearTmpCommand(sock, chatId, message);
                 break;
-            case userMessage === '.setpp':
+            case 'setpp':
                 await setProfilePicture(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.setgdesc'):
-                {
-                    const text = rawText.slice(9).trim();
-                    await setGroupDescription(sock, chatId, senderId, text, message);
-                }
+            case 'setgdesc':
+                await setGroupDescription(sock, chatId, senderId, rawText.slice(parsedCmd.prefixUsed.length + 8).trim(), message);
                 break;
-            case userMessage.startsWith('.setgname'):
-                {
-                    const text = rawText.slice(9).trim();
-                    await setGroupName(sock, chatId, senderId, text, message);
-                }
+            case 'setgname':
+                await setGroupName(sock, chatId, senderId, rawText.slice(parsedCmd.prefixUsed.length + 8).trim(), message);
                 break;
-            case userMessage.startsWith('.setgpp'):
+            case 'setgpp':
                 await setGroupPhoto(sock, chatId, senderId, message);
                 break;
-            case userMessage.startsWith('.creategr'):
-                {
-                    const groupName = rawText.slice(9).trim();
-                    await createGroupCommand(sock, chatId, message, groupName, senderId, senderIsSudo);
-                }
+            case 'creategr':
+                await createGroupCommand(sock, chatId, message, rawText.slice(parsedCmd.prefixUsed.length + 8).trim(), senderId, senderIsSudo);
                 break;
-            case userMessage.startsWith('.instagram') || userMessage.startsWith('.insta') || (userMessage === '.ig' || userMessage.startsWith('.ig ')):
+            case 'instagram':
+            case 'insta':
+            case 'ig':
                 await instagramCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.igsc'):
+            case 'igsc':
                 await igsCommand(sock, chatId, message, true);
                 break;
-            case userMessage.startsWith('.igs'):
+            case 'igs':
                 await igsCommand(sock, chatId, message, false);
                 break;
-            case userMessage.startsWith('.fb') || userMessage.startsWith('.facebook'):
+            case 'fb':
+            case 'facebook':
                 await facebookCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.music'):
+            case 'music':
                 await playCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.spotify'):
+            case 'spotify':
                 await spotifyCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.play') || userMessage.startsWith('.mp3') || userMessage.startsWith('.ytmp3') || userMessage.startsWith('.song'):
+            case 'play':
+            case 'mp3':
+            case 'ytmp3':
+            case 'song':
                 await songCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.video') || userMessage.startsWith('.ytmp4'):
+            case 'video':
+            case 'ytmp4':
                 await videoCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.tiktok') || userMessage.startsWith('.tt'):
+            case 'tiktok':
+            case 'tt':
                 await tiktokCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.gpt') || userMessage.startsWith('.gemini'):
+            case 'gpt':
+            case 'gemini':
                 await aiCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.translate') || userMessage.startsWith('.trt'):
-                const commandLength = userMessage.startsWith('.translate') ? 10 : 4;
-                await handleTranslateCommand(sock, chatId, message, userMessage.slice(commandLength));
+            case 'translate':
+            case 'trt':
+                await handleTranslateCommand(sock, chatId, message, parsedCmd.rawBody.slice(parsedCmd.commandName === 'translate' ? 9 : 3).trim());
                 return;
-            case userMessage.startsWith('.ss') || userMessage.startsWith('.ssweb') || userMessage.startsWith('.screenshot'):
-                const ssCommandLength = userMessage.startsWith('.screenshot') ? 11 : (userMessage.startsWith('.ssweb') ? 6 : 3);
-                await handleSsCommand(sock, chatId, message, userMessage.slice(ssCommandLength).trim());
+            case 'ss':
+            case 'ssweb':
+            case 'screenshot':
+                await handleSsCommand(sock, chatId, message, parsedCmd.rawBody.slice(parsedCmd.commandName.length).trim());
                 break;
-            case userMessage.startsWith('.areact') || userMessage.startsWith('.autoreact') || userMessage.startsWith('.autoreaction'):
+            case 'areact':
+            case 'autoreact':
+            case 'autoreaction':
                 await handleAreactCommand(sock, chatId, message, senderHasOwnerAccess);
                 break;
-            case userMessage.startsWith('.sudo'):
+            case 'sudo':
                 await sudoCommand(sock, chatId, message);
                 break;
-            case userMessage === '.goodnight' || userMessage === '.lovenight' || userMessage === '.gn':
+            case 'goodnight':
+            case 'lovenight':
+            case 'gn':
                 await goodnightCommand(sock, chatId, message);
                 break;
-            case userMessage === '.shayari' || userMessage === '.shayri':
+            case 'shayari':
+            case 'shayri':
                 await shayariCommand(sock, chatId, message);
                 break;
-            case userMessage === '.roseday':
+            case 'roseday':
                 await rosedayCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.imagine') || userMessage.startsWith('.flux') || userMessage.startsWith('.dalle'): 
+            case 'imagine':
+            case 'flux':
+            case 'dalle':
                 await imagineCommand(sock, chatId, message);
                 break;
-            case userMessage === '.jid': 
+            case 'jid':
                 await groupJidCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.autotyping'):
-                const args = userMessage.slice(12).trim();
-                await autotypingImproved(sock, chatId, message, args);
+            case 'autotyping':
+                await autotypingImproved(sock, chatId, message, parsedCmd.args.join(' '));
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.autoread'):
+            case 'autoread':
                 await autoreadCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.heart'):
+            case 'heart':
                 await handleHeart(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.horny'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['horny', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
+            case 'horny':
+            case 'circle':
+            case 'lgbt':
+            case 'lolice':
+            case 'simpcard':
+            case 'tonikawa':
+            case 'its-so-stupid':
+            case 'namecard':
+            case 'tweet':
+            case 'ytcomment':
+            case 'comrade':
+            case 'gay':
+            case 'glass':
+            case 'jail':
+            case 'passed':
+            case 'triggered':
+                await miscCommand(sock, chatId, message, [parsedCmd.commandName, ...parsedCmd.args]);
                 break;
-            case userMessage.startsWith('.circle'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['circle', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
+            case 'oogway2':
+            case 'oogway':
+                await miscCommand(sock, chatId, message, [parsedCmd.commandName, ...parsedCmd.args]);
                 break;
-            case userMessage.startsWith('.lgbt'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['lgbt', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
+            case 'anime':
+            case 'animu':
+                await animeCommand(sock, chatId, message, parsedCmd.args);
+                commandExecuted = true;
                 break;
-            case userMessage.startsWith('.lolice'):
+            case 'nom':
+            case 'poke':
+            case 'cry':
+            case 'kiss':
+            case 'pat':
+            case 'hug':
+            case 'wink':
+            case 'facepalm':
+            case 'face-palm':
+            case 'animuquote':
+            case 'loli':
                 {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['lolice', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.simpcard'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['simpcard', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.tonikawa'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['tonikawa', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.its-so-stupid'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['its-so-stupid', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.namecard'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['namecard', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.oogway2'):
-            case userMessage.startsWith('.oogway'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const sub = userMessage.startsWith('.oogway2') ? 'oogway2' : 'oogway';
-                    const args = [sub, ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.tweet'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['tweet', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.ytcomment'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const args = ['youtube-comment', ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.comrade'):
-            case userMessage.startsWith('.gay'):
-            case userMessage.startsWith('.glass'):
-            case userMessage.startsWith('.jail'):
-            case userMessage.startsWith('.passed'):
-            case userMessage.startsWith('.triggered'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    const sub = userMessage.slice(1).split(/\s+/)[0];
-                    const args = [sub, ...parts.slice(1)];
-                    await miscCommand(sock, chatId, message, args);
-                }
-                break;
-            case userMessage.startsWith('.anime'):
-            case userMessage.startsWith('.animu'):
-                {
-                    const parts = rawText.trim().split(/\s+/);
-                    const args = parts.slice(1);
-                    await animeCommand(sock, chatId, message, args);
-                    commandExecuted = true;
-                }
-                break;
-            case userMessage.startsWith('.nom'):
-            case userMessage.startsWith('.poke'):
-            case userMessage.startsWith('.cry'):
-            case userMessage.startsWith('.kiss'):
-            case userMessage.startsWith('.pat'):
-            case userMessage.startsWith('.hug'):
-            case userMessage.startsWith('.wink'):
-            case userMessage.startsWith('.facepalm'):
-            case userMessage.startsWith('.face-palm'):
-            case userMessage.startsWith('.animuquote'):
-            case userMessage.startsWith('.quote'):
-            case userMessage.startsWith('.loli'):
-                {
-                    const parts = userMessage.trim().split(/\s+/);
-                    let sub = parts[0].slice(1);
+                    let sub = parsedCmd.commandName;
                     if (sub === 'facepalm') sub = 'face-palm';
-                    if (sub === 'quote' || sub === 'animuquote') sub = 'quote';
+                    if (sub === 'animuquote') sub = 'quote';
                     await animeCommand(sock, chatId, message, [sub]);
                 }
                 break;
-            case userMessage === '.crop':
+            case 'crop':
                 await stickercropCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.pies'):
-                {
-                    const parts = rawText.trim().split(/\s+/);
-                    const args = parts.slice(1);
-                    await piesCommand(sock, chatId, message, args);
-                    commandExecuted = true;
-                }
-                break;
-            case userMessage === '.china':
-                await piesAlias(sock, chatId, message, 'china');
+            case 'pies':
+                await piesCommand(sock, chatId, message, parsedCmd.args);
                 commandExecuted = true;
                 break;
-            case userMessage === '.indonesia':
-                await piesAlias(sock, chatId, message, 'indonesia');
+            case 'china':
+            case 'indonesia':
+            case 'japan':
+            case 'korea':
+            case 'hijab':
+                await piesAlias(sock, chatId, message, parsedCmd.commandName);
                 commandExecuted = true;
                 break;
-            case userMessage === '.japan':
-                await piesAlias(sock, chatId, message, 'japan');
+            case 'update':
+                await updateCommand(sock, chatId, message, senderIsSudo, parsedCmd.args[0] || '');
                 commandExecuted = true;
                 break;
-            case userMessage === '.korea':
-                await piesAlias(sock, chatId, message, 'korea');
-                commandExecuted = true;
+            case 'removebg':
+            case 'rmbg':
+            case 'nobg':
+                removebgCommand.exec(sock, message, parsedCmd.args);
                 break;
-            case userMessage === '.hijab':
-                await piesAlias(sock, chatId, message, 'hijab');
-                commandExecuted = true;
+            case 'remini':
+            case 'enhance':
+            case 'upscale':
+                await reminiCommand(sock, chatId, message, parsedCmd.args);
                 break;
-            case userMessage.startsWith('.update'):
-                {
-                    const parts = rawText.trim().split(/\s+/);
-                    const zipArg = parts[1] && parts[1].startsWith('http') ? parts[1] : '';
-                    await updateCommand(sock, chatId, message, senderIsSudo, zipArg);
-                }
-                commandExecuted = true;
-                break;
-            case userMessage.startsWith('.removebg') || userMessage.startsWith('.rmbg') || userMessage.startsWith('.nobg'):
-                await removebgCommand.exec(sock, message, userMessage.split(' ').slice(1));
-                break;
-            case userMessage.startsWith('.remini') || userMessage.startsWith('.enhance') || userMessage.startsWith('.upscale'):
-                await reminiCommand(sock, chatId, message, userMessage.split(' ').slice(1));
-                break;
-            case userMessage.startsWith('.sora'):
+            case 'sora':
                 await soraCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.obfuscate'):
-                {
-                    const obfuscateArgs = rawText.slice(10).trim();
-                    await obfuscateCommand(sock, chatId, message, obfuscateArgs);
-                    commandExecuted = true;
-                }
+            case 'obfuscate':
+                await obfuscateCommand(sock, chatId, message, parsedCmd.args.join(' '));
+                commandExecuted = true;
                 break;
             default:
                 if (isGroup) {
-                    if (userMessage) {
-                        await handleChatbotResponse(sock, chatId, message, userMessage, senderId);
+                    if (rawText) {
+                        await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                     }
                     await handleTagDetection(sock, chatId, message, senderId);
                     await handleMentionDetection(sock, chatId, message);
@@ -1311,27 +1147,15 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 break;
         }
 
-        if (commandExecuted !== false) {
-            // Command was executed successfully
-        }
-
         async function groupJidCommand(sock, chatId, message) {
             const groupJid = message.key.remoteJid;
-
             if (!groupJid.endsWith('@g.us')) {
-                return await sock.sendMessage(chatId, {
-                    text: "❌ This command can only be used in a group."
-                });
+                return await sock.sendMessage(chatId, { text: "❌ This command can only be used in a group." });
             }
-
-            await sock.sendMessage(chatId, {
-                text: `✅ Group JID: ${groupJid}`
-            }, {
-                quoted: message
-            });
+            await sock.sendMessage(chatId, { text: `✅ Group JID: ${groupJid}` }, { quoted: message });
         }
 
-        if (userMessage.startsWith('.')) {
+        if (parsedCmd.isCommand) {
             await addCommandReaction(sock, message);
         }
     } catch (error) {
@@ -1348,7 +1172,6 @@ async function handleMessages(sock, messageUpdate, printLog) {
 async function handleGroupParticipantUpdate(sock, update) {
     try {
         const { id, participants, action, author } = update;
-
         if (!id.endsWith('@g.us')) return;
 
         let isPublic = true;
@@ -1371,9 +1194,6 @@ async function handleGroupParticipantUpdate(sock, update) {
 
         if (action === 'add') {
             await handleAntiBot(sock, id, participants);
-        }
-
-        if (action === 'add') {
             await handleJoinEvent(sock, id, participants);
         }
 
