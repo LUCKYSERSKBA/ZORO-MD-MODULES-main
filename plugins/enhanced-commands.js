@@ -40,8 +40,8 @@ function writeState(name, data) {
  * Usage: .approve (reply to join request) or .approve all
  */
 async function approveCommand(sock, chatId, message, args, senderId) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
+    if (!chatId || !chatId.endsWith('@g.us')) {
+        return;
     }
 
     try {
@@ -95,7 +95,6 @@ async function approveCommand(sock, chatId, message, args, senderId) {
         }, { quoted: message });
     } catch (error) {
         console.error('Approve command error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error approving join request. Make sure the bot is admin!' }, { quoted: message });
     }
 }
 
@@ -104,8 +103,8 @@ async function approveCommand(sock, chatId, message, args, senderId) {
  * Usage: .disapprove (reply to join request) or .disapprove all
  */
 async function disapproveCommand(sock, chatId, message, args, senderId) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
+    if (!chatId || !chatId.endsWith('@g.us')) {
+        return;
     }
 
     try {
@@ -159,16 +158,13 @@ async function disapproveCommand(sock, chatId, message, args, senderId) {
         }, { quoted: message });
     } catch (error) {
         console.error('Disapprove command error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error rejecting join request. Make sure the bot is admin!' }, { quoted: message });
     }
 }
 
 // ==================== GROUP PROFILE PICTURE COMMANDS ====================
 
 async function getGroupPPCommand(sock, chatId, message) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
-    }
+    if (!chatId || !chatId.endsWith('@g.us')) return;
 
     try {
         let ppUrl;
@@ -185,7 +181,6 @@ async function getGroupPPCommand(sock, chatId, message) {
         }, { quoted: message });
     } catch (error) {
         console.error('Get group PP error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error fetching group profile picture!' }, { quoted: message });
     }
 }
 
@@ -228,9 +223,6 @@ async function getPPCommand(sock, chatId, message) {
         }, { quoted: message });
     } catch (error) {
         console.error('Get PP error:', error);
-        await sock.sendMessage(chatId, { 
-            text: '❌ Error fetching profile picture!' 
-        }, { quoted: message });
     }
 }
 
@@ -255,46 +247,37 @@ async function groupIdCommand(sock, chatId, message) {
         await sock.sendMessage(chatId, { text }, { quoted: message });
     } catch (error) {
         console.error('Group ID command error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error fetching group IDs!' }, { quoted: message });
     }
 }
 
 // ==================== GROUP OPEN/CLOSE COMMANDS ====================
 
 async function closeGroupCommand(sock, chatId, message) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
-    }
+    if (!chatId || !chatId.endsWith('@g.us')) return;
 
     try {
         await sock.groupSettingUpdate(chatId, 'announcement');
         await sock.sendMessage(chatId, { text: '🔒 *Group Closed!*\nOnly admins can send messages now.' }, { quoted: message });
     } catch (error) {
         console.error('Close group error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error closing group. Make sure the bot is admin!' }, { quoted: message });
     }
 }
 
 async function openGroupCommand(sock, chatId, message) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
-    }
+    if (!chatId || !chatId.endsWith('@g.us')) return;
 
     try {
         await sock.groupSettingUpdate(chatId, 'not_announcement');
         await sock.sendMessage(chatId, { text: '🔓 *Group Opened!*\nAll members can send messages now.' }, { quoted: message });
     } catch (error) {
         console.error('Open group error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error opening group. Make sure the bot is admin!' }, { quoted: message });
     }
 }
 
 // ==================== ANTI-STICKER COMMAND ====================
 
 async function antistickerCommand(sock, chatId, message, args) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
-    }
+    if (!chatId || !chatId.endsWith('@g.us')) return;
 
     const isAdmin = require('../lib/isAdmin');
     const senderId = message.key.participant || message.key.remoteJid;
@@ -358,9 +341,7 @@ async function handleAntiSticker(sock, chatId, message, senderId) {
 const OWNER_NUMBERS = ['918136880986@s.whatsapp.net', '918136880986']; 
 
 async function antibotCommand(sock, chatId, message, args) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
-    }
+    if (!chatId || !chatId.endsWith('@g.us')) return;
 
     const state = readState('antibot', {});
     const argStr = (args || '').trim().toLowerCase();
@@ -392,14 +373,13 @@ async function antibotCommand(sock, chatId, message, args) {
 
 async function handleAntiBot(sock, chatId, participants) {
     const state = readState('antibot', {});
-    if (!state[chatId]) return;
+    if (!state[chatId] || !participants) return;
 
     const botNumber = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
 
     for (const participant of participants) {
         try {
             const pNumber = participant.split('@')[0].split(':')[0];
-            // 🌟 മാസ്റ്റർ ഓണർ നമ്പറോ ബോട്ട് തന്നെയോ ആണെങ്കിൽ ഒരിക്കലും റിമൂവ് ചെയ്യപ്പെടില്ല
             if (participant === botNumber || pNumber === '918136880986' || OWNER_NUMBERS.includes(participant)) continue;
 
             const isOtherBot = participant.includes(':') || 
@@ -420,32 +400,30 @@ async function handleAntiBot(sock, chatId, participants) {
     }
 }
 
-async function handleAntiBotMessage(sock, chatId, message, senderId, userMessage) {
-    if (!chatId.endsWith('@g.us')) return false;
+async function handleAntiBotMessage(sock, chatId, message, senderId, userMessage = '') {
+    if (!chatId || !chatId.endsWith('@g.us')) return false;
 
     const state = readState('antibot', {});
     if (!state[chatId]) return false;
 
     const botNumber = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
-    const senderNumber = senderId.split('@')[0].split(':')[0];
+    const cleanSender = senderId ? senderId.split('@')[0].split(':')[0] : '';
     
-    // 🌟 മാസ്റ്റർ ഓണർ നമ്പറോ, ബോട്ട് സെൽഫോ, ഫ്രം മീയോ ആണെങ്കിൽ ആന്റി-ബോട്ട് കംപ്ലീറ്റ് ബൈപാസ് ചെയ്യും!
-    if (senderId === botNumber || senderNumber === '918136880986' || OWNER_NUMBERS.includes(senderId) || message.key.fromMe) return false;
+    // 🌟 Master Owner Bypass Check
+    if (senderId === botNumber || cleanSender === '918136880986' || OWNER_NUMBERS.includes(senderId) || message?.key?.fromMe) return false;
 
     const msgText = (
-        message.message?.conversation || 
-        message.message?.extendedTextMessage?.text || 
-        message.message?.imageMessage?.caption || 
-        message.message?.videoMessage?.caption || 
+        userMessage ||
+        message?.message?.conversation || 
+        message?.message?.extendedTextMessage?.text || 
+        message?.message?.imageMessage?.caption || 
+        message?.message?.videoMessage?.caption || 
         ''
     ).toLowerCase();
 
-    // അന്യബോട്ടുകളുടെ ലക്ഷണങ്ങൾ അല്ലെങ്കിൽ ടാഗ്-ഓൾ/സ്പാം മെസ്സേജുകൾ തിരിച്ചറിയൽ
-    const isBotJidPattern = senderId.includes(':') || 
-                            senderId.toLowerCase().includes('bot') || 
-                            senderId.toLowerCase().includes('baileys') ||
+    const isBotJidPattern = (senderId && (senderId.includes(':') || senderId.toLowerCase().includes('bot') || senderId.toLowerCase().includes('baileys'))) ||
                             msgText.includes('tagall') ||
-                            message.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 5 ||
+                            (message?.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 5) ||
                             msgText.includes('bot info') || 
                             msgText.includes('erfan-md') ||
                             msgText.includes('runtime:');
@@ -454,7 +432,7 @@ async function handleAntiBotMessage(sock, chatId, message, senderId, userMessage
         try {
             await sock.groupParticipantsUpdate(chatId, [senderId], 'remove');
             await sock.sendMessage(chatId, {
-                text: `🤖 *ZORO MD Anti-Bot Triggered!*\nDetected another active bot response/activity. Removed: @${senderId.split('@')[0]}`,
+                text: `🤖 *ZORO MD Anti-Bot Triggered!*\nDetected another active bot response/activity. Removed: @${cleanSender}`,
                 mentions: [senderId]
             });
             return true;
@@ -468,9 +446,7 @@ async function handleAntiBotMessage(sock, chatId, message, senderId, userMessage
 // ==================== ANTI-FORWARD COMMAND ====================
 
 async function antiforwardCommand(sock, chatId, message, args) {
-    if (!chatId.endsWith('@g.us')) {
-        return await sock.sendMessage(chatId, { text: '❌ This command only works in groups!' }, { quoted: message });
-    }
+    if (!chatId || !chatId.endsWith('@g.us')) return;
 
     const isAdmin = require('../lib/isAdmin');
     const senderId = message.key.participant || message.key.remoteJid;
@@ -581,7 +557,6 @@ async function toAudioCommand(sock, chatId, message) {
         fs.unlinkSync(outputPath);
     } catch (error) {
         console.error('ToAudio error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error converting video to audio!' }, { quoted: message });
     }
 }
 
@@ -608,7 +583,6 @@ async function volvideoCommand(sock, chatId, message) {
 
     } catch (error) {
         console.error('Volvideo error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error converting to video note!' }, { quoted: message });
     }
 }
 
@@ -658,7 +632,6 @@ async function toViewOnceCommand(sock, chatId, message) {
         }
     } catch (error) {
         console.error('ToViewOnce error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error converting to view once!' }, { quoted: message });
     }
 }
 
@@ -703,7 +676,6 @@ async function editCaptionCommand(sock, chatId, message, args) {
         await sock.sendMessage(chatId, { text: '✅ Caption updated!' }, { quoted: message });
     } catch (error) {
         console.error('EditCaption error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error editing caption!' }, { quoted: message });
     }
 }
 
@@ -725,7 +697,6 @@ async function blockCommand(sock, chatId, message) {
         }, { quoted: message });
     } catch (error) {
         console.error('Block error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error blocking user!' }, { quoted: message });
     }
 }
 
@@ -746,7 +717,6 @@ async function unblockAllCommand(sock, chatId, message) {
         }, { quoted: message });
     } catch (error) {
         console.error('UnblockAll error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error unblocking users!' }, { quoted: message });
     }
 }
 
@@ -908,7 +878,6 @@ END:VCARD`;
 
     } catch (error) {
         console.error('Realowner error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error fetching owner information!' }, { quoted: message });
     }
 }
 
