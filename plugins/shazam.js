@@ -1,8 +1,9 @@
-// ZORO-MD Shazam Plugin
-const axios = require('axios');
+// ZORO-MD Shazam Plugin (Using shazamio npm package)
+const { Shazam } = require('shazamio');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+
+const shazam = new Shazam();
 
 async function shazamCommand(sock, chatId, message) {
     try {
@@ -16,29 +17,35 @@ async function shazamCommand(sock, chatId, message) {
         await sock.sendMessage(chatId, { text: '🔍 Searching for this song...' }, { quoted: message });
 
         // ഓഡിയോ ഫയൽ ഡൗൺലോഡ് ചെയ്ത് ടെമ്പററി ആയി സേവ് ചെയ്യുന്നു
-        const stream = await sock.downloadAndSaveMediaMessage(quoted, 'shazam_temp');
+        let stream;
+        try {
+            stream = await sock.downloadAndSaveMediaMessage(quoted, 'shazam_temp');
+        } catch (e) {
+            const { downloadMediaMessage } = require('@aadhixd777/baileys');
+            const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {});
+            stream = path.join(process.cwd(), 'temp', 'shazam_temp.mp3');
+            fs.writeFileSync(stream, buffer);
+        }
         
-        // Shazam API ലേക്ക് ഫയൽ അയച്ച് ഡീറ്റെയിൽസ് ഫെച്ച് ചെയ്യുന്നു (Public Shazam API endpoint)
-        const bitmap = fs.readFileSync(stream);
-        const bufferBase64 = Buffer.from(bitmap).toString('base64');
+        if (!fs.existsSync(stream)) {
+            return await sock.sendMessage(chatId, { text: '❌ Failed to process the audio file for Shazam.' }, { quoted: message });
+        }
 
-        const response = await axios.post('https://www.shazam.com/discovery/v5/en/US/web/-/track/shazam-buff', bufferBase64, {
-            headers: { 'Content-Type': 'application/octet-stream' }
-        }).catch(() => null);
+        // shazamio പാക്കേജ് ഉപയോഗിച്ച് ഓഡിയോ റെക്കഗ്നൈസ് ചെയ്യുന്നു
+        const data = await shazam.recognize(stream);
 
         // ടെംപ് ഫയൽ ഡിലീറ്റ് ചെയ്യുന്നു
         if (fs.existsSync(stream)) fs.unlinkSync(stream);
 
-        if (!response || !response.data || !response.data.track) {
-            // ആൾട്ടർനേറ്റീവ് API മെത്തേഡ് അല്ലെങ്കിൽ റാപ്പർ ഉപയോഗിച്ചുള്ള സിമ്പിൾ സെർച്ച്
+        if (!data || !data.track) {
             return await sock.sendMessage(chatId, { text: '❌ Could not find any matching song. Try sending a clearer audio sample!' }, { quoted: message });
         }
 
-        const track = response.data.track;
+        const track = data.track;
         const title = track.title || 'Unknown';
         const artist = track.subtitle || 'Unknown Artist';
         const genres = track.genres?.primary || 'N/A';
-        const coverArt = track.images?.coverart || '';
+        const coverArt = track.images?.coverart || track.images?.background || '';
         const shareUrl = track.share?.href || '';
 
         let caption = `╭─❖ 『 🎵 𝙕𝙊𝙍🇴 - 𝙈𝘿 𝙎𝙃𝘼𝙕𝘼𝙈 』 ❖\n` +
@@ -55,7 +62,7 @@ async function shazamCommand(sock, chatId, message) {
             await sock.sendMessage(chatId, { text: caption }, { quoted: message });
         }
 
-    } file (err) {
+    } catch (err) {
         console.error('Shazam Error:', err);
         await sock.sendMessage(chatId, { text: '❌ An error occurred while recognizing the song.' }, { quoted: message });
     }
