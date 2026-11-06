@@ -9,6 +9,7 @@ async function setMenuUrlCommand(sock, chatId, message, args) {
             }, { quoted: message });
         }
 
+        // ഗ്രൂപ്പായാലും പ്രൈവറ്റ് ആയാലും കൃത്യമായ യൂസർ ഐഡി എടുക്കാൻ
         const userId = message.key.participant || message.key.remoteJid;
         const isImage = /\.(jpg|jpeg|png|webp)$/i.test(newUrl);
 
