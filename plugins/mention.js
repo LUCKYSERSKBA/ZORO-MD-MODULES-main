@@ -1,4 +1,4 @@
-// ZORO-MD Clean Mention Plugin (Default + Custom URLs + Random PTT)
+// ZORO-MD Clean Mention Plugin (with type/audio format support)
 const mongoose = require('mongoose');
 
 const MONGO_URI = "mongodb+srv://sncckollam_db_user:u1F26vimHTZ9wYLe@cluster0.5qfiepf.mongodb.net/";
@@ -15,36 +15,33 @@ async function ensureDb() {
 
 const MentionData = mongoose.models.MentionData || mongoose.model('MentionData', new mongoose.Schema({
     sessionId: { type: String, unique: true, index: true },
-    audios: [String] // യൂസർ ആഡ് ചെയ്യുന്ന കസ്റ്റം ഓഡിയോ URL-കൾ ഇവിടെ സേവ് ആകും
+    audios: [String]
 }, { collection: 'mentiondata' }));
 
-// ഡിഫോൾട്ട് ആയിട്ടുള്ള 2 ഓഡിയോ ലിങ്കുകൾ (ആരും കസ്റ്റം സെറ്റ് ചെയ്തില്ലെങ്കിൽ ഇത് വർക്ക് ചെയ്യും)
+// ഡിഫോൾട്ട് ആയിട്ടുള്ള 2 ഓഡിയോ ലിങ്കുകൾ
 const DEFAULT_AUDIOS = [
     "https://files.catbox.moe/9c6z8z.mp3",
     "https://files.catbox.moe/sd28g8.mp3"
 ];
 
 async function sendMention(conn, to, quotedMek, sessionId) {
-    let audioList = [...DEFAULT_AUDIOS]; // തുടക്കത്തിൽ ഡിഫോൾട്ട് ലിങ്കുകൾ എടുക്കുന്നു
+    let audioList = [...DEFAULT_AUDIOS];
     
     const connected = await ensureDb();
     if (connected) {
         try {
             const doc = await MentionData.findOne({ sessionId });
             if (doc && Array.isArray(doc.audios) && doc.audios.length > 0) {
-                // ഡിഫോൾട്ട് ലിങ്കുകളും യൂസർ സെറ്റ് ചെയ്ത കസ്റ്റം ലിങ്കുകളും ഒന്നിച്ചു ചേർക്കുന്നു
                 audioList = [...DEFAULT_AUDIOS, ...doc.audios];
             }
         } catch (e) {}
     }
 
-    // ആകെ ഉള്ള ലിസ്റ്റിൽ നിന്ന് റാൻഡം ആയി ഒരെണ്ണം തിരഞ്ഞെടുക്കുന്നു
     const selectedUrl = audioList[Math.floor(Math.random() * audioList.length)];
     if (!selectedUrl) return false;
 
     const participantJid = quotedMek.key.participant || quotedMek.key.remoteJid;
 
-    // ജസ്റ്റ് ഒരു നോർമൽ വോയിസ് നോട്ട് (PTT) ആയി മാത്രം സെൻഡ് ചെയ്യുന്നു (വേറെ ആഡ്സോ ഫോട്ടോയോ ഇല്ല)
     await conn.sendMessage(to, {
         audio: { url: selectedUrl },
         mimetype: 'audio/ogg; codecs=opus',
@@ -110,39 +107,47 @@ async function setMentionCommand(sock, chatId, message, args) {
 
     const msg = message.message || {};
     const textContent = (msg.conversation || msg.extendedTextMessage?.text || '').trim();
-    const commandArgs = textContent.split(/\s+/).slice(1).join(' ');
+    let commandArgs = textContent.split(/\s+/).slice(1).join(' ');
+
+    if (!commandArgs) {
+        return sock.sendMessage(chatId, {
+            text: `╭─❖ 『 📣 𝙕𝙊𝙍🇴 - 𝙈𝘿 ᴍᴇɴᴛɪᴏɴ 』 ❖\n` +
+                  `╰──────────────⍟\n\n` +
+                  `📌 *Usage Examples:*\n` +
+                  `• \`.setmention https://url1.mp3 type/audio\`\n` +
+                  `• \`.setmention https://url1.mp3 , https://url2.mp3 type/audio\`\n` +
+                  `• \`.setmention reset\``
+        }, { quoted: message });
+    }
 
     if (commandArgs.toLowerCase() === 'reset') {
         await ensureDb();
         await MentionData.deleteOne({ sessionId });
-        return sock.sendMessage(chatId, { text: `✅ Mention audios reset to default defaults!` }, { quoted: message });
+        return sock.sendMessage(chatId, { text: `✅ Mention audios reset to default!` }, { quoted: message });
     }
 
-    // യൂസർ `.setmention https://url1.mp3 https://url2.mp3` എന്ന് നൽകിയാൽ സേവ് ആകും
-    if (commandArgs && commandArgs.startsWith('http')) {
-        const newUrls = commandArgs.split(/[\s,]+/).filter(u => u.startsWith('http'));
-        await ensureDb();
-        
-        const doc = await MentionData.findOne({ sessionId });
-        const existingAudios = (doc && Array.isArray(doc.audios)) ? doc.audios : [];
-        const updatedAudios = [...existingAudios, ...newUrls];
+    // അവസാനം വരുന്ന 'type/audio' എന്ന ഭാഗം ഉണ്ടെങ്കിൽ അത് ഒഴിവാക്കുന്നു
+    commandArgs = commandArgs.replace(/type\/audio/gi, '').trim();
 
-        await MentionData.findOneAndUpdate(
-            { sessionId },
-            { audios: updatedAudios },
-            { upsert: true }
-        );
+    // കോമ (,) വെച്ചോ സ്പേസ് വെച്ചോ ലിങ്കുകൾ പിരിച്ചെടുക്കുന്നു
+    const newUrls = commandArgs.split(/[\s,]+/).filter(u => u.startsWith('http'));
 
-        return sock.sendMessage(chatId, { text: `✅ Successfully added ${newUrls.length} audio URL(s)! Total custom URLs: ${updatedAudios.length}` }, { quoted: message });
+    if (newUrls.length === 0) {
+        return sock.sendMessage(chatId, { text: `❌ Please provide a valid URL ending with type/audio` }, { quoted: message });
     }
 
-    return sock.sendMessage(chatId, {
-        text: `╭─❖ 『 📣 𝙕𝙊𝙍𝙊 - 𝙈𝘿 ᴍᴇɴᴛɪᴏɴ 』 ❖\n` +
-              `╰──────────────⍟\n\n` +
-              `📌 *Usage:*\n` +
-              `• \`.setmention https://url1.mp3 https://url2.mp3\` - Add custom audio URLs.\n` +
-              `• \`.setmention reset\` - Reset to default audios only.`
-    }, { quoted: message });
+    await ensureDb();
+    const doc = await MentionData.findOne({ sessionId });
+    const existingAudios = (doc && Array.isArray(doc.audios)) ? doc.audios : [];
+    const updatedAudios = [...existingAudios, ...newUrls];
+
+    await MentionData.findOneAndUpdate(
+        { sessionId },
+        { audios: updatedAudios },
+        { upsert: true }
+    );
+
+    return sock.sendMessage(chatId, { text: `✅ Successfully added ${newUrls.length} audio URL(s)! Total custom URLs: ${updatedAudios.length}` }, { quoted: message });
 }
 
 module.exports = { handleMentionDetection, setMentionCommand };
