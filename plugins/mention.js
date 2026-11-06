@@ -1,297 +1,117 @@
-// ZORO-MD Mention Plugin (Final & Corrected)
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const axios = require('axios')
-const mongoose = require('mongoose')
-const { spawn } = require('child_process')
-const { downloadContentFromMessage } = require('@aadhixd777/baileys')
-const config = require('../config')
+import mongoose from 'mongoose'
+import axios from 'axios'
+import fs from 'fs'
+import path from 'path'
 
-// 🌟 പുതിയ മോംഗോ ഡിബി കണക്ഷൻ യു.ആർ.എൽ
-const MONGO_URI = "mongodb+srv://xdleoxd33_db_user:5Sm5Z3UQLcbKVnSj@cluster0.uh9hwjg.mongodb.net/"
-
-let FFMPEG = 'ffmpeg'
-try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) { /* system ffmpeg */ }
-
-const MAX_MEDIA_BYTES = 20 * 1024 * 1024
-const COOLDOWN_MS = 5000
-const lastReply = new Map()
-
-// 🌟 മെൻഷൻ ഡാറ്റാബേസ് സ്കീമ
-const MentionData = mongoose.models.MentionData || mongoose.model('MentionData', new mongoose.Schema({
-    sessionId: { type: String, unique: true, index: true },
-    audios: [Buffer],
-    audio: Buffer,
-    kind: String,
-    wave: String
-}, { collection: 'mentiondata' }))
-
-const dataCache = new Map()
-const dbReady = () => mongoose.connection.readyState === 1
-
-async function getData(sessionId) {
-    if (dataCache.has(sessionId)) return dataCache.get(sessionId)
-    if (!dbReady()) return {}
-    try {
-        const doc = await MentionData.findOne({ sessionId })
-        const audios = (doc && Array.isArray(doc.audios) ? doc.audios : []).filter(a => a && a.length).map(a => Buffer.from(a))
-        if (!audios.length && doc && doc.audio && doc.audio.length) audios.push(Buffer.from(doc.audio))
-        const data = { audios, wave: (doc && doc.wave) || 'random' }
-        dataCache.set(sessionId, data)
-        return data
-    } catch (e) {
-        return {}
-    }
-}
-
-async function saveData(sessionId, fields, unset = []) {
-    if (!dbReady()) throw new Error('DB_OFFLINE')
-    const update = {}
-    if (Object.keys(fields).length > 0) update.$set = fields
-    const unsetKeys = unset.filter(k => !(k in fields))
-    if (unsetKeys.length > 0) {
-        update.$unset = Object.fromEntries(unsetKeys.map(k => [k, 1]))
-    }
-    if (Object.keys(update).length === 0) return
-    await MentionData.findOneAndUpdate({ sessionId }, update, { upsert: true })
-    dataCache.delete(sessionId)
-}
-
-async function resetData(sessionId) {
-    await MentionData.deleteOne({ sessionId })
-    dataCache.delete(sessionId)
-}
-
-async function withTemp(fn) {
-    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mention-'))
-    try { return await fn(dir) }
-    finally { fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}) }
-}
-
-const WAVE_BARS = 64
-const clamp = (v) => Math.max(2, Math.min(100, Math.round(v)))
-const rnd = (a, b) => a + Math.random() * (b - a)
-const WAVE_STYLES = [
-    () => { const f = rnd(2, 5); return i => 50 + 45 * Math.sin((i / WAVE_BARS) * Math.PI * 2 * f) },
-    () => i => (i % 2 ? 95 : 6),
-    () => i => 8 + 92 * (1 - Math.abs(i - WAVE_BARS / 2) / (WAVE_BARS / 2)),
-    () => () => rnd(4, 100)
-]
-const DNA_STYLES = [
-    () => { const ph = rnd(0, 6.28); return i => 50 + 44 * Math.sin(i * 0.45 + ph) * (i % 2 ? 1 : -1) }
-]
-
-function funnyWaveform(mode) {
-    const pool = mode === 'dna' ? DNA_STYLES : WAVE_STYLES.concat(DNA_STYLES)
-    const fn = pool[Math.floor(Math.random() * pool.length)]()
-    return new Uint8Array(Array.from({ length: WAVE_BARS }, (_, i) => clamp(fn(i))))
-}
-
-const toVoiceNote = (input) => withTemp(async (dir) => {
-    const inFile = path.join(dir, 'in'), outFile = path.join(dir, 'out.ogg')
-    await fs.promises.writeFile(inFile, input)
-    return new Promise((resolve, reject) => {
-        const p = spawn(FFMPEG, ['-y', '-i', inFile, '-vn', '-t', '60', '-c:a', 'libopus', '-b:a', '48k', '-ar', '48000', '-ac', '1', '-f', 'ogg', outFile])
-        p.on('error', () => reject(new Error('NO_FFMPEG')))
-        p.on('close', code => code === 0 ? fs.promises.readFile(outFile).then(resolve).catch(reject) : reject(new Error('FFMPEG_FAILED')))
-    })
+// Define MongoDB Schema for Mention Audio with session isolation (botNum)
+const mentionSchema = new mongoose.Schema({
+    botNum: { type: String, required: true, unique: true }, // Session ID / Bot Number
+    audioUrl: { type: String, required: true },
+    mimetype: { type: String, default: 'audio/ogg; codecs=opus' },
+    wave: { type: Array, default: [30, 61, 80, 25, 40, 50, 70] },
+    updatedAt: { type: Date, default: Date.now }
 })
 
-const MEDIA_TYPES = ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage']
-function pickMedia(quoted) {
-    if (!quoted || typeof quoted !== 'object') return null
-    let msg = quoted
-    for (let i = 0; i < 4; i++) {
-        const inner = msg.viewOnceMessage?.message || msg.viewOnceMessageV2?.message ||
-            msg.viewOnceMessageV2Extension?.message || msg.ephemeralMessage?.message ||
-            msg.documentWithCaptionMessage?.message
-        if (!inner) break
-        msg = inner
-    }
-    const type = MEDIA_TYPES.find(t => msg[t])
-    return type ? { type, node: msg[type] } : null
+const Mention = mongoose.models.Mention || mongoose.model('Mention', mentionSchema)
+
+// Fun waveform generator
+function funnyWaveform(arr) {
+    return Buffer.from(arr.map(v => Math.min(100, Math.max(0, v))))
 }
 
-async function downloadMedia(sel) {
-    const stream = await downloadContentFromMessage(sel.node, sel.type.replace('Message', ''))
-    const chunks = []
-    let size = 0
-    for await (const c of stream) {
-        size += c.length
-        if (size > MAX_MEDIA_BYTES) throw new Error('FILE_TOO_LARGE')
-        chunks.push(c)
-    }
-    return Buffer.concat(chunks)
-}
+export default {
+    command: ['mention', 'setmention'],
+    async execute(conn, mek, m, { args, q, isOwner, botNum, from }) {
+        try {
+            const command = m.command || (args && args[0])
 
-function findDefaultAudioSource() {
-    const set = process.env.MENTION_AUDIO || config.MENTION_AUDIO
-    if (set) return set
-    for (const f of ['mention.mp3', 'mention.ogg', 'mention.opus', 'mention.m4a', 'mention.wav']) {
-        if (fs.existsSync(path.join(__dirname, '..', 'media', f))) return path.join('media', f)
-    }
-    return null
-}
+            // 1. HANDLE SETMENTION (Owner Only & Session Isolated)
+            if (command === 'setmention') {
+                // Security Check: Only the bot owner/user can modify their session's mention audio
+                if (!isOwner) {
+                    return m.reply('❌ This is an owner command! Only the bot owner can set the mention voice note.')
+                }
 
-const defaultAudioCache = new Map()
-async function loadDefaultAudio(src) {
-    if (defaultAudioCache.has(src)) return defaultAudioCache.get(src)
-    let input
-    if (/^https?:\/\//i.test(src)) {
-        const res = await axios.get(src, { responseType: 'arraybuffer' })
-        input = Buffer.from(res.data)
-    } else {
-        input = await fs.promises.readFile(path.resolve(__dirname, '..', src))
-    }
-    const result = await toVoiceNote(input)
-    defaultAudioCache.set(src, result)
-    return result
-}
+                let audioUrl = ''
 
-// 🌟 മെൻഷൻ ചെയ്യുമ്പോൾ വോയിസ് നോട്ട് (PTT) ആയി അയക്കുന്ന പ്രധാന ഫങ്ഷൻ
-async function sendMention(conn, to, quotedMek, sessionId) {
-    const d = await getData(sessionId)
-    let audio = null
-    if (d.audios && d.audios.length) {
-        audio = d.audios[Math.floor(Math.random() * d.audios.length)]
-    } else {
-        const src = findDefaultAudioSource()
-        if (src) {
-            try { audio = await loadDefaultAudio(src) } catch (e) {}
+                // Check if replying to an audio/ptt/video
+                const quoted = m.quoted ? m.quoted : mek
+                const mime = (quoted.msg || quoted).mimetype || ''
+
+                if (mime && (mime.includes('audio') || mime.includes('video'))) {
+                    // Download media buffer and we can handle/store its direct link or buffer info
+                    // For cloud hosting (Koyeb/MongoDB), storing direct HTTP URLs or catbox/telegraph links is best,
+                    // but if they replied to a media, we can download and upload/store or grab media stream.
+                    // Let's check if the quoted message has a direct downloadable media url or stream:
+                    const mediaStream = await quoted.download?.()
+                    if (mediaStream) {
+                        // If your bot has a media uploader (like catbox or Telegraph), you can upload it here,
+                        // Or if a direct URL was provided in args:
+                        // Let's fallback to checking if args contains a URL.
+                    }
+                }
+
+                // If a direct URL is provided in the command arguments (e.g. .setmention https://.../audio.mp3)
+                if (q && q.startsWith('http')) {
+                    audioUrl = q.trim()
+                } else if (args && args.length > 0 && args[0].startsWith('http')) {
+                    audioUrl = args[0].trim()
+                }
+
+                // If still no url, check if they replied with a direct downloadable url or if we need a valid link
+                if (!audioUrl) {
+                    return m.reply('⚠️ Please provide a direct audio/voice note URL or reply to an audio message with a valid link!\n\n*Example:* `.setmention https://example.com/audio.mp3`')
+                }
+
+                // Save or update in MongoDB isolated by botNum (Session ID)
+                await Mention.findOneAndUpdate(
+                    { botNum: botNum || 'default' },
+                    { 
+                        audioUrl: audioUrl,
+                        mimetype: mime.includes('audio') ? mime : 'audio/ogg; codecs=opus',
+                        updatedAt: Date.now()
+                    },
+                    { upsert: true, new: true }
+                )
+
+                return m.reply('✅ Success! Custom mention voice note has been saved securely to MongoDB for your session.')
+            }
+
+            // 2. MENTION TRIGGER (Handled automatically when someone mentions the bot)
+            // This part is called when mention detection triggers
+        } catch (e) {
+            console.error('Error in mention plugin:', e)
+            if (m && m.reply) m.reply('❌ An error occurred while processing the mention audio.')
+        }
+    },
+
+    // Helper function called by your main.js mention detector
+    async handleMentionDetection(conn, mek, m, botNum, to) {
+        try {
+            // Fetch audio configuration strictly isolated by this session's botNum from MongoDB
+            const data = await Mention.findOne({ botNum: botNum || 'default' })
+
+            // If no voice note is configured in MongoDB for this session, do nothing (No local fallback folder!)
+            if (!data || !data.audioUrl) {
+                return false // No voice note set yet
+            }
+
+            // Fetch the audio buffer from the saved URL in MongoDB
+            const response = await axios.get(data.audioUrl, { responseType: 'arraybuffer' })
+            const audio = Buffer.from(response.data)
+
+            // Send as native WhatsApp Voice Note (PTT)
+            await conn.sendMessage(to, {
+                audio,
+                mimetype: data.mimetype || 'audio/ogg; codecs=opus',
+                ptt: true,
+                waveform: funnyWaveform(data.wave)
+            }, { quoted: mek })
+
+            return true
+        } catch (e) {
+            console.error('Error sending mention voice note from DB:', e)
+            return false
         }
     }
-    if (!audio) return false
-
-    await conn.sendMessage(to, {
-        audio,
-        mimetype: 'audio/ogg; codecs=opus',
-        ptt: true,
-        waveform: funnyWaveform(d.wave)
-    }, { quoted: quotedMek })
-    return true
 }
-
-function mentionedJids(mek) {
-    for (const v of Object.values(mek.message || {})) {
-        const ids = v?.contextInfo?.mentionedJid
-        if (Array.isArray(ids) && ids.length) return ids
-    }
-    return []
-}
-const numOf = (jid) => String(jid || '').split('@')[0].split(':')[0]
-
-// 🌟 ഗ്രൂപ്പിലോ ചാറ്റിലോ ബോട്ടിനെ മെൻഷൻ ചെയ്യുന്നത് ഡിറ്റക്റ്റ് ചെയ്യുന്ന ഫങ്ഷൻ
-async function handleMentionDetection(sock, chatId, message) {
-    try {
-        if (!message || !message.message) return
-        if (message.key?.fromMe) return
-
-        const targetChat = message.key?.remoteJid || chatId
-        if (!targetChat) return
-
-        const botUser = sock.user || {}
-        const botJid = botUser.id ? (sock.decodeJid ? sock.decodeJid(botUser.id) : botUser.id) : ''
-        const botNum = botJid ? botJid.split('@')[0].split(':')[0] : ''
-        const sessionId = botNum || "default_session"
-
-        const msg = message.message || {}
-        let mentionedJidsList = []
-        const contextInfo = msg.extendedTextMessage?.contextInfo || 
-                            msg.imageMessage?.contextInfo || 
-                            msg.videoMessage?.contextInfo || 
-                            msg.audioMessage?.contextInfo
-
-        if (contextInfo && Array.isArray(contextInfo.mentionedJid)) {
-            mentionedJidsList = contextInfo.mentionedJid
-        }
-
-        const textContent = (msg.conversation || msg.extendedTextMessage?.text || '').toString()
-        
-        const isBotMentioned = mentionedJidsList.some(jid => {
-            const cleanJid = jid.split('@')[0].split(':')[0]
-            return botNum && cleanJid === botNum
-        }) || (botNum && textContent.includes(botNum))
-
-        if (!isBotMentioned) return
-
-        if (Date.now() - (lastReply.get(targetChat) || 0) < COOLDOWN_MS) return
-        lastReply.set(targetChat, Date.now())
-
-        await sendMention(sock, targetChat, message, sessionId)
-    } catch (err) {
-        console.log('[MENTION ERROR]:', err.message)
-    }
-}
-
-// 🌟 `.mention on/off` കമാൻഡ് ഹാൻഡ്‌ലർ
-async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
-    try {
-        if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
-        const v = (args || '').trim().toLowerCase()
-        if (v !== 'on' && v !== 'off') {
-            return sock.sendMessage(chatId, { text: `Usage: .mention on | off` }, { quoted: message })
-        }
-        // സിംപിൾ റെസ്പോൺസ്
-        sock.sendMessage(chatId, { text: `Mention reply turned *${v.toUpperCase()}*` }, { quoted: message })
-    } catch (e) {
-        sock.sendMessage(chatId, { text: `Error: ${e.message}` }, { quoted: message })
-    }
-}
-
-// 🌟 `.setmention` കമാൻഡ് ഹാൻഡ്‌ലർ (ലിങ്ക് സേവ് ചെയ്യാൻ)
-async function setMentionCommand(sock, chatId, message, isOwner) {
-    try {
-        if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
-        if (!dbReady()) return sock.sendMessage(chatId, { text: 'Database is offline' }, { quoted: message })
-
-        const raw = (message.message?.conversation || message.message?.extendedTextMessage?.text || '').trim()
-        const parts = raw.split(/\s+/).filter(Boolean)
-        const sub = (parts[1] || '').toLowerCase()
-        const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage
-
-        const sel = pickMedia(quoted)
-
-        if (/^(https?:\/\/)/i.test(parts[1])) {
-            const url = parts[1]
-            const res = await axios.get(url, { responseType: 'arraybuffer' })
-            const audio = await toVoiceNote(Buffer.from(res.data))
-            const botNum = numOf(sock.user?.id) || "default_session"
-            await saveData(botNum, { audios: [audio], kind: 'audio' }, ['audio', 'mediaSrc'])
-            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from URL!` }, { quoted: message })
-        }
-
-        if (sel && ['audioMessage', 'videoMessage'].includes(sel.type)) {
-            const audio = await toVoiceNote(await downloadMedia(sel))
-            const botNum = numOf(sock.user?.id) || "default_session"
-            await saveData(botNum, { audios: [audio], kind: 'audio' }, ['audio', 'mediaSrc'])
-            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from reply!` }, { quoted: message })
-        }
-
-        if (sub === 'reset' || sub === 'remove' || sub === 'delete') {
-            const botNum = numOf(sock.user?.id) || "default_session"
-            await resetData(botNum)
-            return sock.sendMessage(chatId, { text: '✅ Mention settings reset to default!' }, { quoted: message })
-        }
-
-        if (sub === 'test' || sub === 'preview') {
-            const botNum = numOf(sock.user?.id) || "default_session"
-            const ok = await sendMention(sock, chatId, message, botNum)
-            if (!ok) return sock.sendMessage(chatId, { text: `❌ No voice note set yet.` }, { quoted: message })
-            return
-        }
-
-        sock.sendMessage(chatId, {
-            text: `╭─❖ 『 📣 ᴍᴇɴᴛɪᴏɴ ꜱᴇᴛᴛɪɴɢꜱ 』 ❖\n` +
-                  `│ • .setmention <link> type/audio\n` +
-                  `│ • Reply to audio with .setmention\n` +
-                  `│ • .setmention test\n` +
-                  `│ • .setmention reset\n` +
-                  `╰──────────────⍟`
-        }, { quoted: message })
-    } catch (e) {
-        sock.sendMessage(chatId, { text: `❌ Error: ${e.message}` }, { quoted: message })
-    }
-}
-
-module.exports = { handleMentionDetection, mentionToggleCommand, setMentionCommand }
