@@ -1,11 +1,12 @@
-const settings = require("../settings");
+const Settings = require("../settings");
+const MenuSettings = require("../database/model"); // ഡാറ്റാബേസ് മോഡൽ കോൾ ചെയ്യുന്നു
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 
 const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
-const menuVideoUrl = "https://files.catbox.moe/4i9a80.mp4";
+const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4"; // ഡിഫോൾട്ട് ലിങ്ക്
 
 function formatTime(seconds) {
     const days = Math.floor(seconds / (24 * 60 * 60));
@@ -46,6 +47,16 @@ async function helpCommand(sock, chatId, message) {
         const uptimeFormatted = formatTime(uptimeInSeconds);
         const currentDate = getEastAfricaDate();
         let userName = message.pushName || "Aadhi Xd";
+
+        // യൂസറുടെ ഐഡി എടുക്കുന്നു (ഓരോ യൂസർക്കും വെവ്വേറെ സെറ്റ് ചെയ്യാൻ)
+        const userId = message.key.participant || message.key.remoteJid;
+
+        // ഡാറ്റാബേസിൽ ഈ യൂസർ കസ്റ്റം ലിങ്ക് സെറ്റ് ചെയ്തിട്ടുണ്ടോ എന്ന് നോക്കുന്നു
+        const customSettings = await MenuSettings.findOne({ userId: userId });
+
+        // കസ്റ്റം ലിങ്ക് ഉണ്ടെങ്കിൽ അത് എടുക്കും, ഇല്ലെങ്കിൽ ഡിഫോൾട്ട് ലിങ്ക് ഉപയോഗിക്കും
+        const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuVideoUrl;
+        const isImageMedia = customSettings ? customSettings.mediaType === 'image' : false;
 
         let thumbnailBuffer = null;
         let base64Image = '';
@@ -100,7 +111,7 @@ async function helpCommand(sock, chatId, message) {
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
 ┃ ❍ 𝐔𝐩𝐭𝐢𝐦𝐞 : ${uptimeFormatted}
-┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${settings.version || '3.0.0'}
+┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Settings.version || '3.0.0'}
 ┃ ❍ 𝐏𝐫𝐞𝐟𝐢𝐱 : .
 ╰═════════════════⊷
 
@@ -324,24 +335,41 @@ ${readMoreKey}
 ┃ ❍ .𝐬𝐜𝐫𝐢𝐩𝐭
 ┃ ❍ .𝐫𝐞𝐩𝐨
 ╰══════════════⊷
-> 𝐙𝐎𝐑𝐎 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
+> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        await sock.sendMessage(chatId, {
-            video: { url: menuVideoUrl },
-            caption: helpMessage.trim(),
-            mimetype: 'video/mp4',
-            ptv: false,
-            contextInfo: {
-                forwardingScore: 999,
-                isForwarded: true,
-                forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363321456789012@newsletter',
-                    newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
-                    serverMessageId: 100
+        // ഇമേജ് ആണോ അതോ വീഡിയോ ആണോ എന്ന് നോക്കി ഓട്ടോമാറ്റിക്കായി സെൻഡ് ചെയ്യുന്നു
+        if (isImageMedia) {
+            await sock.sendMessage(chatId, {
+                image: { url: finalMediaUrl },
+                caption: helpMessage.trim(),
+                contextInfo: {
+                    forwardingScore: 999,
+                    isForwarded: true,
+                    forwardedNewsletterMessageInfo: {
+                        newsletterJid: '120363321456789012@newsletter',
+                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                        serverMessageId: 100
+                    }
                 }
-            }
-        }, { quoted: vcardReply });
+            }, { quoted: vcardReply });
+        } else {
+            await sock.sendMessage(chatId, {
+                video: { url: finalMediaUrl },
+                caption: helpMessage.trim(),
+                mimetype: 'video/mp4',
+                ptv: false,
+                contextInfo: {
+                    forwardingScore: 999,
+                    isForwarded: true,
+                    forwardedNewsletterMessageInfo: {
+                        newsletterJid: '120363321456789012@newsletter',
+                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                        serverMessageId: 100
+                    }
+                }
+            }, { quoted: vcardReply });
+        }
 
     } catch (error) {
         console.error('Error in help command:', error);
