@@ -39,38 +39,36 @@ const ffmpeg = require('fluent-ffmpeg');
 const { isSudo } = require('./lib/index');
 const { autoreadCommand, isAutoreadEnabled, handleAutoread } = require('./plugins/autoread');
 
-// 🌟 User-Specific Prefix MongoDB Schema & Functions (Session Isolated)
-const botSettingsSchema = new mongoose.Schema({
-    botId: { type: String, required: true, unique: true },
-    prefix: { type: String, default: '.' }
+// 🌟 User-Specific Prefix MongoDB Schema & Functions (Per-User Prefix Support)
+const userPrefixSchema = new mongoose.Schema({
+    userId: { type: String, required: true, unique: true },
+    prefix: { type: String, required: true }
 });
 
-const BotSettings = mongoose.models.BotSettings || mongoose.model('BotSettings', botSettingsSchema);
+const UserPrefix = mongoose.models.UserPrefix || mongoose.model('UserPrefix', userPrefixSchema);
 
-async function getBotPrefix(sock) {
+async function getUserPrefix(userId) {
     try {
-        const botId = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : sock.user?.id;
-        const doc = await BotSettings.findOne({ botId });
-        return doc ? doc.prefix : '.';
+        const doc = await UserPrefix.findOne({ userId });
+        return doc ? doc.prefix : null; // യൂസർ കസ്റ്റം സെറ്റ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് റിട്ടേൺ ചെയ്യും
     } catch (e) {
-        return '.';
+        return null;
     }
 }
 
-async function setBotPrefix(sock, newPrefix) {
+async function setUserPrefix(userId, newPrefix) {
     try {
-        const botId = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : sock.user?.id;
-        return await BotSettings.findOneAndUpdate(
-            { botId },
+        return await UserPrefix.findOneAndUpdate(
+            { userId },
             { prefix: newPrefix },
             { upsert: true, new: true }
         );
     } catch (e) {
-        console.error('Error setting prefix:', e);
+        console.error('Error setting user prefix:', e);
     }
 }
 
-// Global Allowed Prefixes List (Single & Double Emojis, Symbols without =)
+// Global Allowed Prefixes List (Default Fallback)
 const globalAllowedPrefixes = [
     ".", ",", "/", "!", "%", "<3", 
     "🤍", "🎀", "🐱", "🥂", "🍒", "🐦‍🔥", "🏷️", 
@@ -81,6 +79,7 @@ const globalAllowedPrefixes = [
 // Command imports
 const tagAllCommand = require('./plugins/tagall');
 const helpCommand = require('./plugins/help');
+const setMenuUrlCommand = require('./plugins/setmenuurl'); // 🌟 Added Set Menu URL Plugin
 const banCommand = require('./plugins/ban');
 const { promoteCommand } = require('./plugins/promote');
 const { demoteCommand } = require('./plugins/demote');
@@ -196,7 +195,7 @@ const picCommand = require('./plugins/pic');
 
 const stiCommand = require('./plugins/sti');
 const m4aCommand = require('./plugins/m4a');
-const shazamCommand = require('./plugins/shazam'); // 🌟 Added Shazam Plugin
+const shazamCommand = require('./plugins/shazam');
 
 const {
     bassCommand,
@@ -289,16 +288,21 @@ async function handleMessages(sock, messageUpdate, printLog) {
             message.message?.videoMessage?.caption?.trim() ||
             '';
 
-        // 🌟 Strict User-Specific Prefix Customization & Global Allowed Logic
-        const currentCustomPrefix = await getBotPrefix(sock);
+        // 🌟 Strict Per-User Prefix Logic Check
+        const userCustomPrefix = await getUserPrefix(senderId);
         
         let parsedCmd = { isCommand: false };
-        if (currentCustomPrefix && rawText.startsWith(currentCustomPrefix)) {
-            const commandBody = rawText.slice(currentCustomPrefix.length).trim();
-            const commandName = commandBody.split(' ')[0].toLowerCase();
-            const args = commandBody.split(' ').slice(1);
-            parsedCmd = { isCommand: true, prefixUsed: currentCustomPrefix, commandName, args, rawBody: commandBody };
+        
+        if (userCustomPrefix) {
+            // ഈ യൂസർ കസ്റ്റം പെർഫിക്സ് സെറ്റ് ചെയ്തിട്ടുണ്ടെങ്കിൽ, ആ പെർഫിക്സ് വെച്ച് മാത്രം കമാൻഡ് ചെക്ക് ചെയ്യും
+            if (rawText.startsWith(userCustomPrefix)) {
+                const commandBody = rawText.slice(userCustomPrefix.length).trim();
+                const commandName = commandBody.split(' ')[0].toLowerCase();
+                const args = commandBody.split(' ').slice(1);
+                parsedCmd = { isCommand: true, prefixUsed: userCustomPrefix, commandName, args, rawBody: commandBody };
+            }
         } else {
+            // യൂസർ കസ്റ്റം പെർഫിക്സ് സെറ്റ് ചെയ്തിട്ടില്ലെങ്കിൽ മാത്രം ഗ്ലോബൽ ലിസ്റ്റിലുള്ളവ പരിശോധിക്കും
             const sortedPrefixes = [...globalAllowedPrefixes].sort((a, b) => b.length - a.length);
             for (const prefix of sortedPrefixes) {
                 if (rawText.startsWith(prefix)) {
@@ -391,7 +395,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
             if (isGroup) {
                 await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                 await handleTagDetection(sock, chatId, message, senderId);
-                await handleMentionDetection(sock, chatId, message);
+                await handleMentionDetection(sock, chatId, message); // 🌟 Mention detection handled here
             }
             return;
         }
@@ -443,7 +447,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         let commandExecuted = false;
 
-        // 🌟 .setprefix Command Handler
+        // 🌟 .setprefix Command Handler (Per-User Storage Update)
         if (parsedCmd.isCommand && parsedCmd.commandName === 'setprefix') {
             const newPrefixArg = parsedCmd.args[0];
             
@@ -451,7 +455,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 const suggestionMsg = 
 `✨ *Bot Prefix Configuration* ✨
 
-Current Prefix: \`${currentCustomPrefix}\`
+Current Prefix: \`${userCustomPrefix || '.'}\`
 
 To change your bot prefix, use the command followed by your desired symbol, single emoji, or double emoji combination.
 
@@ -469,8 +473,8 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 return;
             }
 
-            await setBotPrefix(sock, newPrefixArg);
-            await sock.sendMessage(chatId, { text: `✅ Bot prefix successfully updated to: *${newPrefixArg}*\n\nYou can now use commands with your new prefix!` }, { quoted: message });
+            await setUserPrefix(senderId, newPrefixArg);
+            await sock.sendMessage(chatId, { text: `✅ Your custom bot prefix has been successfully updated to: *${newPrefixArg}*\n\nFrom now on, you can only use commands with this prefix!` }, { quoted: message });
             return;
         }
 
@@ -536,6 +540,11 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'bot':
             case 'list':
                 await helpCommand(sock, chatId, message, global.channelLink);
+                commandExecuted = true;
+                break;
+            case 'setmenuurl':
+            case 'menuurl':
+                await setMenuUrlCommand(sock, chatId, message, parsedCmd.args);
                 commandExecuted = true;
                 break;
             case 'sticker':
@@ -1171,44 +1180,4 @@ To change your bot prefix, use the command followed by your desired symbol, sing
 
 async function handleGroupParticipantUpdate(sock, update) {
     try {
-        const { id, participants, action, author } = update;
-        if (!id.endsWith('@g.us')) return;
-
-        let isPublic = true;
-        try {
-            const modeData = JSON.parse(fs.readFileSync('./data/messageCount.json'));
-            if (typeof modeData.isPublic === 'boolean') isPublic = modeData.isPublic;
-        } catch (e) {}
-
-        if (action === 'promote') {
-            if (!isPublic) return;
-            await handlePromotionEvent(sock, id, participants, author);
-            return;
-        }
-
-        if (action === 'demote') {
-            if (!isPublic) return;
-            await handleDemotionEvent(sock, id, participants, author);
-            return;
-        }
-
-        if (action === 'add') {
-            await handleAntiBot(sock, id, participants);
-            await handleJoinEvent(sock, id, participants);
-        }
-
-        if (action === 'remove') {
-            await handleLeaveEvent(sock, id, participants);
-        }
-    } catch (error) {
-        console.error('Error in handleGroupParticipantUpdate:', error);
-    }
-}
-
-module.exports = {
-    handleMessages,
-    handleGroupParticipantUpdate,
-    handleStatus: async (sock, status) => {
-        await handleStatusUpdate(sock, status);
-    }
-};
+        ...
