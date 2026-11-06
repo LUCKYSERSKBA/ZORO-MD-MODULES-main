@@ -77,7 +77,7 @@ asyncio.run(main())
         const coverArt = track.images?.coverart || track.images?.background || '';
         const shareUrl = track.share?.href || '';
 
-        let caption = `╭─❖ 『 🎵 𝙕𝙊𝙍🇴 - 𝙈𝘿 𝙎𝙃𝘼𝙕𝘼𝙈 』 ❖\n` +
+        let caption = `╭─❖ 『 🎵 𝐒𝐡𝐚𝐳𝐚𝐦-𝐁𝐲 𝐀𝐚𝐝𝐡𝐢𝐱𝐝 』 ❖\n` +
                       `╰──────────────⍟\n\n` +
                       `📌 *Title:* ${title}\n` +
                       `🎤 *Artist:* ${artist}\n` +
