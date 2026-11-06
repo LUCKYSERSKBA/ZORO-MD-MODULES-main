@@ -50,7 +50,7 @@ const UserPrefix = mongoose.models.UserPrefix || mongoose.model('UserPrefix', us
 async function getUserPrefix(userId) {
     try {
         const doc = await UserPrefix.findOne({ userId });
-        return doc ? doc.prefix : null; // യൂസർ കസ്റ്റം സെറ്റ് ചെയ്തിട്ടുണ്ടെങ്കിൽ അത് റിട്ടേൺ ചെയ്യും
+        return doc ? doc.prefix : null;
     } catch (e) {
         return null;
     }
@@ -79,7 +79,7 @@ const globalAllowedPrefixes = [
 // Command imports
 const tagAllCommand = require('./plugins/tagall');
 const helpCommand = require('./plugins/help');
-const setMenuUrlCommand = require('./plugins/setmenuurl'); // 🌟 Added Set Menu URL Plugin
+const setMenuUrlCommand = require('./plugins/setmenuurl');
 const banCommand = require('./plugins/ban');
 const { promoteCommand } = require('./plugins/promote');
 const { demoteCommand } = require('./plugins/demote');
@@ -294,7 +294,6 @@ async function handleMessages(sock, messageUpdate, printLog) {
         let parsedCmd = { isCommand: false };
         
         if (userCustomPrefix) {
-            // ഈ യൂസർ കസ്റ്റം പെർഫിക്സ് സെറ്റ് ചെയ്തിട്ടുണ്ടെങ്കിൽ, ആ പെർഫിക്സ് വെച്ച് മാത്രം കമാൻഡ് ചെക്ക് ചെയ്യും
             if (rawText.startsWith(userCustomPrefix)) {
                 const commandBody = rawText.slice(userCustomPrefix.length).trim();
                 const commandName = commandBody.split(' ')[0].toLowerCase();
@@ -302,7 +301,6 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 parsedCmd = { isCommand: true, prefixUsed: userCustomPrefix, commandName, args, rawBody: commandBody };
             }
         } else {
-            // യൂസർ കസ്റ്റം പെർഫിക്സ് സെറ്റ് ചെയ്തിട്ടില്ലെങ്കിൽ മാത്രം ഗ്ലോബൽ ലിസ്റ്റിലുള്ളവ പരിശോധിക്കും
             const sortedPrefixes = [...globalAllowedPrefixes].sort((a, b) => b.length - a.length);
             for (const prefix of sortedPrefixes) {
                 if (rawText.startsWith(prefix)) {
@@ -395,7 +393,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
             if (isGroup) {
                 await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                 await handleTagDetection(sock, chatId, message, senderId);
-                await handleMentionDetection(sock, chatId, message); // 🌟 Mention detection handled here
+                await handleMentionDetection(sock, chatId, message);
             }
             return;
         }
@@ -1180,4 +1178,44 @@ To change your bot prefix, use the command followed by your desired symbol, sing
 
 async function handleGroupParticipantUpdate(sock, update) {
     try {
-        ...
+        const { id, participants, action, author } = update;
+        if (!id.endsWith('@g.us')) return;
+
+        let isPublic = true;
+        try {
+            const modeData = JSON.parse(fs.readFileSync('./data/messageCount.json'));
+            if (typeof modeData.isPublic === 'boolean') isPublic = modeData.isPublic;
+        } catch (e) {}
+
+        if (action === 'promote') {
+            if (!isPublic) return;
+            await handlePromotionEvent(sock, id, participants, author);
+            return;
+        }
+
+        if (action === 'demote') {
+            if (!isPublic) return;
+            await handleDemotionEvent(sock, id, participants, author);
+            return;
+        }
+
+        if (action === 'add') {
+            await handleAntiBot(sock, id, participants);
+            await handleJoinEvent(sock, id, participants);
+        }
+
+        if (action === 'remove') {
+            await handleLeaveEvent(sock, id, participants);
+        }
+    } catch (error) {
+        console.error('Error in handleGroupParticipantUpdate:', error);
+    }
+}
+
+module.exports = {
+    handleMessages,
+    handleGroupParticipantUpdate,
+    handleStatus: async (sock, status) => {
+        await handleStatusUpdate(sock, status);
+    }
+};
