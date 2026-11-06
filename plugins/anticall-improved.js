@@ -53,8 +53,10 @@ function writeState(enabled, mode, message) {
 
 async function anticallCommand(sock, chatId, message, args) {
     const state = readState();
-    const argStr = (args || '').trim();
-    const parts = argStr.split(' ');
+    
+    // Safely handle both Array and String args input
+    const argStr = Array.isArray(args) ? args.join(' ') : (typeof args === 'string' ? args : '');
+    const parts = argStr.trim().split(/\s+/).filter(Boolean);
     const sub = parts[0]?.toLowerCase();
 
     // Help text with beautiful styling
