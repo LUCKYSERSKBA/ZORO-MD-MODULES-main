@@ -97,7 +97,10 @@ const deleteCommand = require('./plugins/delete');
 const { handleAntilinkCommand, handleLinkDetection } = require('./plugins/antilink');
 const { handleAntitagCommand, handleTagDetection } = require('./plugins/antitag');
 const { Antilink } = require('./lib/antilink');
+
+// 🌟 Updated Mention Import
 const { handleMentionDetection, mentionToggleCommand, setMentionCommand } = require('./plugins/mention');
+
 const memeCommand = require('./plugins/meme');
 const tagCommand = require('./plugins/tag');
 const tagNotAdminCommand = require('./plugins/tagnotadmin');
@@ -1112,7 +1115,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
             case 'pies':
                 await piesCommand(sock, chatId, message, parsedCmd.args);
-                commandExecuted = true;
                 break;
             case 'china':
             case 'indonesia':
@@ -1120,7 +1122,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'korea':
             case 'hijab':
                 await piesAlias(sock, chatId, message, parsedCmd.commandName);
-                commandExecuted = true;
                 break;
             case 'update':
                 await updateCommand(sock, chatId, message, senderIsSudo, parsedCmd.args[0] || '');
