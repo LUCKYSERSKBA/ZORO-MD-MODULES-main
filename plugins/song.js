@@ -48,7 +48,7 @@ async function songCommand(sock, chatId, message) {
         const styledTitle = applyCustomFont(video.title);
         const styledChannel = applyCustomFont(video.author.name);
 
-        // Styled caption format
+        // Styled caption format for the info card
         const captionText = 
 `╭───────〔 𝐙𝐎𝐑𝐎 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 〕───────
 ├ 🎬 𝗧𝗶𝘁𝗹𝗲: ${styledTitle}
@@ -63,10 +63,6 @@ async function songCommand(sock, chatId, message) {
             caption: captionText 
         }, { quoted: message });
 
-        // Fetch thumbnail image buffer for audio preview
-        const thumbRes = await axios.get(video.thumbnail, { responseType: 'arraybuffer' });
-        const thumbBuffer = Buffer.from(thumbRes.data);
-
         // Fetch audio link using @vreden/youtube_scraper
         const res = await yt.ytmp3(video.url, 128);
         
@@ -80,22 +76,12 @@ async function songCommand(sock, chatId, message) {
         const audioRes = await axios.get(dlUrl, { responseType: 'arraybuffer', timeout: 90000 });
         const audioBuffer = Buffer.from(audioRes.data);
 
-        // Send audio message with embedded video thumbnail
+        // Send pure normal audio message (ExternalAdReply removed)
         await sock.sendMessage(chatId, {
             audio: audioBuffer,
             mimetype: 'audio/mpeg',
             fileName: `${video.title}.mp3`,
-            ptt: false,
-            contextInfo: {
-                externalAdReply: {
-                    title: video.title,
-                    body: `Duration: ${video.timestamp}`,
-                    mediaType: 1,
-                    renderLargerThumbnail: true,
-                    thumbnail: thumbBuffer,
-                    sourceUrl: 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24'
-                }
-            }
+            ptt: false
         }, { quoted: message });
 
         // Send success reaction
