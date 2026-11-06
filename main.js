@@ -194,11 +194,10 @@ const obfuscateCommand = require('./plugins/obfuscate');
 const textstickerCommand = require('./plugins/textsticker');
 const picCommand = require('./plugins/pic');
 
-// NEW: Added user requested custom plugins (.sti and .m4a)
 const stiCommand = require('./plugins/sti');
 const m4aCommand = require('./plugins/m4a');
+const shazamCommand = require('./plugins/shazam'); // 🌟 Added Shazam Plugin
 
-// NEW: Audio effects commands
 const {
     bassCommand,
     blowCommand,
@@ -207,7 +206,6 @@ const {
     robotCommand
 } = require('./plugins/audioeffects');
 
-// Enhanced commands
 const {
     approveCommand,
     disapproveCommand,
@@ -234,7 +232,6 @@ const {
     realownerCommand
 } = require('./plugins/enhanced-commands');
 
-// Improved existing commands
 const { anticallCommand: anticallImproved, handleCall } = require('./plugins/anticall-improved');
 const { autotypingCommand: autotypingImproved, isAutotypingEnabled: isAutotypingEnabledNew, handleAutotypingForMessage: handleAutotypingNew } = require('./plugins/autotyping-improved');
 const { pmblockerCommand: pmblockerImproved, readState: readPmBlockerStateNew } = require('./plugins/pmblocker-improved');
@@ -292,25 +289,27 @@ async function handleMessages(sock, messageUpdate, printLog) {
             message.message?.videoMessage?.caption?.trim() ||
             '';
 
-        // 🌟 Fetch Custom Prefix for current bot session & merge with global prefixes
-        const currentPrefix = await getBotPrefix(sock);
-        const activePrefixes = Array.from(new Set([currentPrefix, ...globalAllowedPrefixes]));
-
-        // 🌟 Helper function to parse command dynamically supporting long prefixes/double emojis first
-        function parseCommand(text, prefixes) {
-            const sortedPrefixes = [...prefixes].sort((a, b) => b.length - a.length);
+        // 🌟 Strict User-Specific Prefix Customization & Global Allowed Logic
+        const currentCustomPrefix = await getBotPrefix(sock);
+        
+        let parsedCmd = { isCommand: false };
+        if (currentCustomPrefix && rawText.startsWith(currentCustomPrefix)) {
+            const commandBody = rawText.slice(currentCustomPrefix.length).trim();
+            const commandName = commandBody.split(' ')[0].toLowerCase();
+            const args = commandBody.split(' ').slice(1);
+            parsedCmd = { isCommand: true, prefixUsed: currentCustomPrefix, commandName, args, rawBody: commandBody };
+        } else {
+            const sortedPrefixes = [...globalAllowedPrefixes].sort((a, b) => b.length - a.length);
             for (const prefix of sortedPrefixes) {
-                if (text.startsWith(prefix)) {
-                    const commandBody = text.slice(prefix.length).trim();
+                if (rawText.startsWith(prefix)) {
+                    const commandBody = rawText.slice(prefix.length).trim();
                     const commandName = commandBody.split(' ')[0].toLowerCase();
                     const args = commandBody.split(' ').slice(1);
-                    return { isCommand: true, prefixUsed: prefix, commandName, args, rawBody: commandBody };
+                    parsedCmd = { isCommand: true, prefixUsed: prefix, commandName, args, rawBody: commandBody };
+                    break;
                 }
             }
-            return { isCommand: false };
         }
-
-        const parsedCmd = parseCommand(rawText, activePrefixes);
 
         let senderName = 'Unknown User';
         let groupName = '';
@@ -444,7 +443,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         let commandExecuted = false;
 
-        // 🌟 .setprefix Command Handler (Clean English, Double Emoji Support, Recommended Emojis & Symbol List)
+        // 🌟 .setprefix Command Handler
         if (parsedCmd.isCommand && parsedCmd.commandName === 'setprefix') {
             const newPrefixArg = parsedCmd.args[0];
             
@@ -452,7 +451,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 const suggestionMsg = 
 `✨ *Bot Prefix Configuration* ✨
 
-Current Prefix: \`${currentPrefix}\`
+Current Prefix: \`${currentCustomPrefix}\`
 
 To change your bot prefix, use the command followed by your desired symbol, single emoji, or double emoji combination.
 
@@ -464,10 +463,7 @@ To change your bot prefix, use the command followed by your desired symbol, sing
 1. 🤍
 2. 🎀
 3. 🍃
-4. !
-
-*All Supported Symbol Prefixes:*
-. , / ! % <3`;
+4. !`;
 
                 await sock.sendMessage(chatId, { text: suggestionMsg }, { quoted: message });
                 return;
@@ -485,6 +481,12 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
             case 'm4a':
                 await m4aCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
+            case 'shazam':
+            case 'find':
+            case 'whatsong':
+                await shazamCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
             case 'simage': {
@@ -1048,7 +1050,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
             case 'autoread':
                 await autoreadCommand(sock, chatId, message);
-                commandExecuted = true;
                 break;
             case 'heart':
                 await handleHeart(sock, chatId, message);
@@ -1133,7 +1134,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
             case 'obfuscate':
                 await obfuscateCommand(sock, chatId, message, parsedCmd.args.join(' '));
-                commandExecuted = true;
                 break;
             default:
                 if (isGroup) {
