@@ -353,9 +353,9 @@ async function handleAntiSticker(sock, chatId, message, senderId) {
     return false;
 }
 
-// ==================== ADVANCED ANTI-BOT COMMAND ====================
+// ==================== ADVANCED ANTI-BOT COMMAND (MASTER OWNER PROTECTED) ====================
 
-const OWNER_NUMBERS = ['918136880986@s.whatsapp.net']; 
+const OWNER_NUMBERS = ['918136880986@s.whatsapp.net', '918136880986']; 
 
 async function antibotCommand(sock, chatId, message, args) {
     if (!chatId.endsWith('@g.us')) {
@@ -394,11 +394,13 @@ async function handleAntiBot(sock, chatId, participants) {
     const state = readState('antibot', {});
     if (!state[chatId]) return;
 
-    const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+    const botNumber = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
 
     for (const participant of participants) {
         try {
-            if (participant === botNumber || OWNER_NUMBERS.includes(participant)) continue;
+            const pNumber = participant.split('@')[0].split(':')[0];
+            // 🌟 മാസ്റ്റർ ഓണർ നമ്പറോ ബോട്ട് തന്നെയോ ആണെങ്കിൽ ഒരിക്കലും റിമൂവ് ചെയ്യപ്പെടില്ല
+            if (participant === botNumber || pNumber === '918136880986' || OWNER_NUMBERS.includes(participant)) continue;
 
             const isOtherBot = participant.includes(':') || 
                                participant.toLowerCase().includes('bot') || 
@@ -424,9 +426,11 @@ async function handleAntiBotMessage(sock, chatId, message, senderId, userMessage
     const state = readState('antibot', {});
     if (!state[chatId]) return false;
 
-    const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+    const botNumber = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+    const senderNumber = senderId.split('@')[0].split(':')[0];
     
-    if (senderId === botNumber || OWNER_NUMBERS.includes(senderId)) return false;
+    // 🌟 മാസ്റ്റർ ഓണർ നമ്പറോ, ബോട്ട് സെൽഫോ, ഫ്രം മീയോ ആണെങ്കിൽ ആന്റി-ബോട്ട് കംപ്ലീറ്റ് ബൈപാസ് ചെയ്യും!
+    if (senderId === botNumber || senderNumber === '918136880986' || OWNER_NUMBERS.includes(senderId) || message.key.fromMe) return false;
 
     const msgText = (
         message.message?.conversation || 
@@ -436,9 +440,12 @@ async function handleAntiBotMessage(sock, chatId, message, senderId, userMessage
         ''
     ).toLowerCase();
 
+    // അന്യബോട്ടുകളുടെ ലക്ഷണങ്ങൾ അല്ലെങ്കിൽ ടാഗ്-ഓൾ/സ്പാം മെസ്സേജുകൾ തിരിച്ചറിയൽ
     const isBotJidPattern = senderId.includes(':') || 
                             senderId.toLowerCase().includes('bot') || 
                             senderId.toLowerCase().includes('baileys') ||
+                            msgText.includes('tagall') ||
+                            message.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 5 ||
                             msgText.includes('bot info') || 
                             msgText.includes('erfan-md') ||
                             msgText.includes('runtime:');
