@@ -1,7 +1,8 @@
 // ZORO-MD Clean Mention Plugin (with type/audio format support)
 const mongoose = require('mongoose');
 
-const MONGO_URI = "mongodb+srv://sncckollam_db_user:u1F26vimHTZ9wYLe@cluster0.5qfiepf.mongodb.net/";
+// 🌟 പുതിയ മോംഗോ ഡിബി കണക്ഷൻ യു.ആർ.എൽ
+const MONGO_URI = "mongodb+srv://xdleoxd33_db_user:5Sm5Z3UQLcbKVnSj@cluster0.uh9hwjg.mongodb.net/";
 
 async function ensureDb() {
     if (mongoose.connection.readyState === 1) return true;
@@ -18,7 +19,7 @@ const MentionData = mongoose.models.MentionData || mongoose.model('MentionData',
     audios: [String]
 }, { collection: 'mentiondata' }));
 
-// ഡിഫോൾട്ട് ആയിട്ടുള്ള 2 ഓഡിയോ ലിങ്കുകൾ
+// ഡിഫോൾട്ട് ആയിട്ടുള്ള ഓഡിയോ ലിങ്കുകൾ (വാട്സാപ്പിൽ ഉറപ്പായും പ്ലേ ആകുന്നവ)
 const DEFAULT_AUDIOS = [
     "https://files.catbox.moe/9c6z8z.mp3",
     "https://files.catbox.moe/sd28g8.mp3"
@@ -31,6 +32,7 @@ async function sendMention(conn, to, quotedMek, sessionId) {
     if (connected) {
         try {
             const doc = await MentionData.findOne({ sessionId });
+            // 🌟 ഡാറ്റാബേസിൽ കസ്റ്റം ലിങ്കുകൾ ഉണ്ടെങ്കിൽ മാത്രം ഡിഫോൾട്ടിന്റെ കൂടെ ചേർക്കും, ഇല്ലെങ്കിൽ ഡിഫോൾട്ട് മാത്രം വർക്ക് ചെയ്യും
             if (doc && Array.isArray(doc.audios) && doc.audios.length > 0) {
                 audioList = [...DEFAULT_AUDIOS, ...doc.audios];
             }
@@ -42,18 +44,22 @@ async function sendMention(conn, to, quotedMek, sessionId) {
 
     const participantJid = quotedMek.key.participant || quotedMek.key.remoteJid;
 
-    await conn.sendMessage(to, {
-        audio: { url: selectedUrl },
-        mimetype: 'audio/ogg; codecs=opus',
-        ptt: true,
-        contextInfo: {
-            mentionedJid: [participantJid],
-            remoteJid: to,
-            participant: participantJid
-        }
-    }, { quoted: quotedMek });
-
-    return true;
+    try {
+        await conn.sendMessage(to, {
+            audio: { url: selectedUrl },
+            mimetype: 'audio/ogg; codecs=opus',
+            ptt: true,
+            contextInfo: {
+                mentionedJid: [participantJid],
+                remoteJid: to,
+                participant: participantJid
+            }
+        }, { quoted: quotedMek });
+        return true;
+    } catch (err) {
+        console.error('Error sending mention voice note:', err);
+        return false;
+    }
 }
 
 async function handleMentionDetection(sock, chatId, message) {
@@ -92,7 +98,9 @@ async function handleMentionDetection(sock, chatId, message) {
         if (!isBotMentioned) return;
 
         await sendMention(sock, targetChat, message, sessionId);
-    } catch (err) {}
+    } catch (err) {
+        console.error('Error in handleMentionDetection:', err);
+    }
 }
 
 async function setMentionCommand(sock, chatId, message, args) {
@@ -126,10 +134,7 @@ async function setMentionCommand(sock, chatId, message, args) {
         return sock.sendMessage(chatId, { text: `✅ Mention audios reset to default!` }, { quoted: message });
     }
 
-    // അവസാനം വരുന്ന 'type/audio' എന്ന ഭാഗം ഉണ്ടെങ്കിൽ അത് ഒഴിവാക്കുന്നു
     commandArgs = commandArgs.replace(/type\/audio/gi, '').trim();
-
-    // കോമ (,) വെച്ചോ സ്പേസ് വെച്ചോ ലിങ്കുകൾ പിരിച്ചെടുക്കുന്നു
     const newUrls = commandArgs.split(/[\s,]+/).filter(u => u.startsWith('http'));
 
     if (newUrls.length === 0) {
