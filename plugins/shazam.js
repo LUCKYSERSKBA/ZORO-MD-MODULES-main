@@ -1,9 +1,9 @@
-// ZORO-MD Shazam Plugin (Using shazamio npm package)
-const { Shazam } = require('shazamio');
+// ZORO-MD Shazam Plugin (Using Python Bridge)
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
-const shazam = new Shazam();
+const util = require('util');
+const execPromise = util.promisify(exec);
 
 async function shazamCommand(sock, chatId, message) {
     try {
@@ -16,14 +16,16 @@ async function shazamCommand(sock, chatId, message) {
 
         await sock.sendMessage(chatId, { text: '🔍 Searching for this song...' }, { quoted: message });
 
-        // ഓഡിയോ ഫയൽ ഡൗൺലോഡ് ചെയ്ത് ടെമ്പററി ആയി സേവ് ചെയ്യുന്നു
         let stream;
+        const tempDir = path.join(process.cwd(), 'temp');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        
         try {
-            stream = await sock.downloadAndSaveMediaMessage(quoted, 'shazam_temp');
+            stream = await sock.downloadAndSaveMediaMessage(quoted, path.join(tempDir, 'shazam_temp'));
         } catch (e) {
             const { downloadMediaMessage } = require('@aadhixd777/baileys');
             const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {});
-            stream = path.join(process.cwd(), 'temp', 'shazam_temp.mp3');
+            stream = path.join(tempDir, 'shazam_temp.mp3');
             fs.writeFileSync(stream, buffer);
         }
         
@@ -31,11 +33,38 @@ async function shazamCommand(sock, chatId, message) {
             return await sock.sendMessage(chatId, { text: '❌ Failed to process the audio file for Shazam.' }, { quoted: message });
         }
 
-        // shazamio പാക്കേജ് ഉപയോഗിച്ച് ഓഡിയോ റെക്കഗ്നൈസ് ചെയ്യുന്നു
-        const data = await shazam.recognize(stream);
+        const pyScript = `
+import asyncio
+from shazamio import Shazam
 
-        // ടെംപ് ഫയൽ ഡിലീറ്റ് ചെയ്യുന്നു
+async def main():
+    shazam = Shazam()
+    out = await shazam.recognize('${stream.replace(/\\/g, '\\\\')}')
+    import json
+    print(json.dumps(out))
+
+asyncio.run(main())
+        `;
+
+        const tempPyPath = path.join(tempDir, 'run_shazam.py');
+        fs.writeFileSync(tempPyPath, pyScript);
+
+        let stdout;
+        try {
+            const { stdout: out } = await execPromise(`python3 ${tempPyPath}`);
+            stdout = out;
+        } catch (pyErr) {
+            console.error('Python Execution Error:', pyErr);
+        }
+
         if (fs.existsSync(stream)) fs.unlinkSync(stream);
+        if (fs.existsSync(tempPyPath)) fs.unlinkSync(tempPyPath);
+
+        if (!stdout) {
+            return await sock.sendMessage(chatId, { text: '❌ Could not recognize the song. Try a clearer audio sample!' }, { quoted: message });
+        }
+
+        const data = JSON.parse(stdout);
 
         if (!data || !data.track) {
             return await sock.sendMessage(chatId, { text: '❌ Could not find any matching song. Try sending a clearer audio sample!' }, { quoted: message });
