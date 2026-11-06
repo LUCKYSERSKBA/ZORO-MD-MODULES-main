@@ -1,4 +1,4 @@
-// ZORO-MD Mention Plugin (Final & Corrected)
+// ZORO-MD Mention Plugin (Final & Corrected with Full Tag/Mention Support)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -172,16 +172,9 @@ async function sendMention(conn, to, quotedMek, sessionId) {
     return true
 }
 
-function mentionedJids(mek) {
-    for (const v of Object.values(mek.message || {})) {
-        const ids = v?.contextInfo?.mentionedJid
-        if (Array.isArray(ids) && ids.length) return ids
-    }
-    return []
-}
 const numOf = (jid) => String(jid || '').split('@')[0].split(':')[0]
 
-// 🌟 ഗ്രൂപ്പിലോ ചാറ്റിലോ ബോട്ടിനെ മെൻഷൻ ചെയ്യുന്നത് ഡിറ്റക്റ്റ് ചെയ്യുന്ന ഫങ്ഷൻ
+// 🌟 ഗ്രൂപ്പിലോ ചാറ്റിലോ വാട്സാപ്പ് ടാഗ് (@) വഴി മെൻഷൻ ചെയ്യുന്നത് 100% പെർഫെക്റ്റ് ആയി ഡിറ്റക്റ്റ് ചെയ്യുന്ന ഫങ്ഷൻ
 async function handleMentionDetection(sock, chatId, message) {
     try {
         if (!message || !message.message) return
@@ -196,20 +189,28 @@ async function handleMentionDetection(sock, chatId, message) {
         const sessionId = botNum || "default_session"
 
         const msg = message.message || {}
-        let mentionedJidsList = []
+        
+        // WhatsApp-ൽ ഗ്രൂപ്പിലായാലും ചാറ്റിലായാലും @ ഇട്ട് ടാഗ് ചെയ്യുമ്പോൾ വരുന്ന contextInfo സുരക്ഷിതമായി പരതുന്നു
         const contextInfo = msg.extendedTextMessage?.contextInfo || 
                             msg.imageMessage?.contextInfo || 
                             msg.videoMessage?.contextInfo || 
-                            msg.audioMessage?.contextInfo
+                            msg.audioMessage?.contextInfo ||
+                            msg.documentMessage?.contextInfo ||
+                            msg.stickerMessage?.contextInfo ||
+                            msg.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
+                            msg.viewOnceMessage?.message?.extendedTextMessage?.contextInfo ||
+                            Object.values(msg).find(v => v?.contextInfo)?.contextInfo
 
+        let mentionedJidsList = []
         if (contextInfo && Array.isArray(contextInfo.mentionedJid)) {
             mentionedJidsList = contextInfo.mentionedJid
         }
 
-        const textContent = (msg.conversation || msg.extendedTextMessage?.text || '').toString()
+        const textContent = (msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '').toString()
         
+        // ബോട്ടിന്റെ നമ്പർ ടാഗ് ലിസ്റ്റിൽ ഉണ്ടോ അതല്ലെങ്കിൽ ടെക്സ്റ്റിൽ ഉണ്ടോ എന്ന് നോക്കുന്നു
         const isBotMentioned = mentionedJidsList.some(jid => {
-            const cleanJid = jid.split('@')[0].split(':')[0]
+            const cleanJid = String(jid || '').split('@')[0].split(':')[0]
             return botNum && cleanJid === botNum
         }) || (botNum && textContent.includes(botNum))
 
@@ -232,7 +233,6 @@ async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
         if (v !== 'on' && v !== 'off') {
             return sock.sendMessage(chatId, { text: `Usage: .mention on | off` }, { quoted: message })
         }
-        // സിംപിൾ റെസ്പോൺസ്
         sock.sendMessage(chatId, { text: `Mention reply turned *${v.toUpperCase()}*` }, { quoted: message })
     } catch (e) {
         sock.sendMessage(chatId, { text: `Error: ${e.message}` }, { quoted: message })
