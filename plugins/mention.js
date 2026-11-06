@@ -7,7 +7,7 @@ const dns = require('dns').promises
 const net = require('net')
 const mongoose = require('mongoose')
 const { spawn } = require('child_process')
-const { downloadContentFromMessage } = require('@whiskeysockets/baileys')
+const { downloadContentFromMessage } = require('@aadhixd777/baileys') // 🌟 ഇവിടെ നിന്റെ ഒറിജിനൽ ലൈബ്രറി നൽകിയിരിക്കുന്നു
 const config = require('../config')
 const { cmd } = require('../command')
 
@@ -17,7 +17,7 @@ const MONGO_URI = "mongodb+srv://xdleoxd33_db_user:5Sm5Z3UQLcbKVnSj@cluster0.uh9
 let FFMPEG = 'ffmpeg'
 try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) { /* system ffmpeg */ }
 
-const COOLDOWN_MS = 5000 // കൂൾഡൗൺ സമയം അല്പം കുറച്ചു
+const COOLDOWN_MS = 5000
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 const OWNER_ONLY = 'Only the bot owner can use this command.'
 const lastReply = new Map()
@@ -262,7 +262,6 @@ async function sendMention(conn, to, quotedMek, sessionId) {
     }
     if (!audio) return false
 
-    // 🌟 വാട്സാപ്പിൽ കറക്റ്റ് ആയി വോയിസ് നോട്ട് (PTT) ആയി പോകാനുള്ള പ്രോപ്പർട്ടികൾ
     await conn.sendMessage(to, {
         audio,
         mimetype: 'audio/ogg; codecs=opus',
@@ -281,7 +280,6 @@ function mentionedJids(mek) {
 }
 const numOf = (jid) => String(jid || '').split('@')[0].split(':')[0]
 
-// 🌟 ബോട്ടിനെ മെൻഷൻ ചെയ്യുമ്പോൾ എല്ലാവർക്കും വർക്ക് ചെയ്യുന്ന രീതിയിലുള്ള ഡിറ്റക്ഷൻ
 cmd({ on: 'body', dontAddCommandList: true, filename: __filename },
 async (conn, mek, m, ctx) => {
     try {
@@ -303,7 +301,6 @@ async (conn, mek, m, ctx) => {
                           mentionedJidsList.some(j => text.includes(numOf(j)))
         if (!mentioned) return
 
-        // സെറ്റിങ്സ് അനുസരിച്ച് മെൻഷൻ ഓൺ ആണോ എന്ന് നോക്കുന്നു
         const s = await getSettings ? await getSettings() : { mention: 'on' }
         if (s.mention === 'off') return
 
