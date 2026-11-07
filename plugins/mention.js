@@ -1,4 +1,4 @@
-// ZORO-MD Advanced Mention Plugin (Integrated with Custom Waveforms, Multi-Audio, MongoDB Isolation & PTT)
+// ZORO-MD Ultimate LID & JID Match Mention Plugin
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -11,20 +11,21 @@ const { downloadContentFromMessage } = require('@aadhixd777/baileys')
 const config = require('../config')
 
 let FFMPEG = 'ffmpeg'
-try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) { /* system ffmpeg */ }
+try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) {}
 
 const opt = (name, fallback) => process.env[name] || config[name] || fallback
-const COOLDOWN_MS = 3000 // സുഗമമായ പ്രവർത്തനത്തിന് ചെറിയ കോൾഡൗൺ
+const COOLDOWN_MS = 3000
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 const OWNER_ONLY = 'Only the bot owner can use this command.'
 const lastReply = new Map()
 
-const cleanNum = (jid) => String(jid || '').replace(/[^0-9]/g, '')
+// Universal ID cleaner for JID, LID and numbers
+const cleanId = (id) => String(id || '').trim().toLowerCase()
 
 const getSessionId = (sock) => {
     const botUser = sock.user || {}
     const botJid = botUser.id ? (sock.decodeJid ? sock.decodeJid(botUser.id) : botUser.id) : ''
-    return cleanNum(botJid) || config.SESSION_ID || "default_session"
+    return cleanId(botJid).split('@')[0].split(':')[0] || config.SESSION_ID || "default_session"
 }
 
 const MentionData = mongoose.models.MentionData || mongoose.model('MentionData', new mongoose.Schema({
@@ -83,13 +84,9 @@ async function resetData(sessionId) {
 const dnsCb = require('dns')
 const fallbackResolver = new dns.Resolver()
 try { fallbackResolver.setServers(['1.1.1.1', '8.8.8.8']) } catch (e) {}
-const DNS_RETRY = ['ENOTFOUND', 'EAI_AGAIN', 'ESERVFAIL', 'ETIMEOUT', 'ETIMEDOUT']
 
 async function lookupAll(host) {
-    try {
-        return await dns.lookup(host, { all: true })
-    } catch (err) {
-        if (!DNS_RETRY.includes(err.code)) throw err
+    try { return await dns.lookup(host, { all: true }) } catch (err) {
         try {
             const addrs = await fallbackResolver.resolve4(host)
             if (addrs.length) return addrs.map(a => ({ address: a, family: 4 }))
@@ -102,7 +99,6 @@ function smartLookup(hostname, options, cb) {
     if (typeof options === 'function') { cb = options; options = {} }
     dnsCb.lookup(hostname, options, (err, address, family) => {
         if (!err) return cb(null, address, family)
-        if (!DNS_RETRY.includes(err.code)) return cb(err)
         fallbackResolver.resolve4(hostname).then(addrs => {
             if (!addrs.length) return cb(err)
             if (options && options.all) return cb(null, addrs.map(a => ({ address: a, family: 4 })))
@@ -141,10 +137,7 @@ async function fetchBuffer(u, maxBytes = MAX_MEDIA_BYTES, hops = 4) {
                 responseType: 'stream', maxRedirects: 0, timeout: 30000, lookup: smartLookup,
                 validateStatus: st => st < 400, headers: { 'User-Agent': 'Mozilla/5.0' }
             })
-        } catch (e) {
-            try { e.host = new URL(current).hostname } catch (_) {}
-            throw e
-        }
+        } catch (e) { throw e }
         if (res.status >= 300 && res.headers.location) {
             res.data.destroy()
             current = new URL(res.headers.location, current).href
@@ -188,18 +181,9 @@ const WAVE_STYLES = [
     () => i => (i % 2 ? 95 : 6),
     () => i => 8 + 92 * (1 - Math.abs(i - WAVE_BARS / 2) / (WAVE_BARS / 2)),
     () => i => 8 + 92 * (Math.abs(i - WAVE_BARS / 2) / (WAVE_BARS / 2)),
-    () => i => 10 + Math.floor(i / 8) * 12,
-    () => i => 100 - Math.floor(i / 8) * 12,
-    () => { const gap = Math.floor(rnd(10, 16)); return i => { const k = i % gap; return k === 2 ? 95 : k === 3 ? 6 : k === 4 ? 70 : 10 } },
-    () => () => rnd(4, 100),
-    () => i => 50 + (i / WAVE_BARS) * 48 * Math.sin(i * 0.9),
-    () => i => (Math.floor(i / 4) % 2 ? 8 : 92),
-    () => i => 8 + 90 * Math.exp(-Math.pow((i - WAVE_BARS / 2) / 12, 2)) + rnd(-6, 6)
 ]
-
 const DNA_STYLES = [
-    () => { const ph = rnd(0, 6.28); return i => 50 + 44 * Math.sin(i * 0.45 + ph) * (i % 2 ? 1 : -1) },
-    () => { const ph = rnd(0, 6.28); return i => 50 + 44 * Math.sin(i * 0.9 + ph) * (i % 2 ? 1 : -1) }
+    () => { const ph = rnd(0, 6.28); return i => 50 + 44 * Math.sin(i * 0.45 + ph) * (i % 2 ? 1 : -1) }
 ]
 
 function funnyWaveform(mode) {
@@ -307,7 +291,7 @@ function mentionedJids(mek) {
     return ids
 }
 
-// 🌟 BULLETPROOF MENTION DETECTION (Zero Failure Universal Match)
+// 🌟 ULTIMATE LID & JID BYPASS DETECTION (Zero Miss Match)
 async function handleMentionDetection(sock, chatId, message) {
     try {
         if (!message || !message.message) return
@@ -317,29 +301,38 @@ async function handleMentionDetection(sock, chatId, message) {
         if (!targetChat) return
 
         const sessionId = getSessionId(sock)
-        const botNum = sessionId
-        if (!botNum) return
-
         const d = await getData(sessionId)
         if (d.status !== 'on') return
 
-        const botNums = new Set([
-            botNum,
-            cleanNum(sock.user?.id),
-            cleanNum(sock.user?.lid),
-            sock.user?.id,
-            sock.user?.lid
+        const botUser = sock.user || {}
+        const rawBotId = cleanId(botUser.id)
+        const rawBotLid = cleanId(botUser.lid)
+        const botNumberOnly = sessionId.replace(/[^0-9]/g, '')
+
+        const botIdentifiers = new Set([
+            rawBotId,
+            rawBotLid,
+            botNumberOnly,
+            rawBotId.split('@')[0],
+            rawBotLid.split('@')[0]
         ].filter(Boolean))
 
         const text = String(
             message.message?.conversation || 
             message.message?.extendedTextMessage?.text || 
             message.message?.imageMessage?.caption || ''
-        )
+        ).toLowerCase()
 
         const mentionedJidsList = mentionedJids(message)
-        const isMentioned = mentionedJidsList.some(j => botNums.has(j) || botNums.has(cleanNum(j))) ||
-                            text.includes(botNum) || text.includes(`@${botNum}`)
+        
+        // Check if any mentioned JID/LID matches bot or if text contains bot number/handle
+        const isMentioned = mentionedJidsList.some(j => {
+            const cleanJ = cleanId(j)
+            const numJ = cleanJ.replace(/[^0-9]/g, '')
+            return botIdentifiers.has(cleanJ) || 
+                   botIdentifiers.has(cleanJ.split('@')[0]) || 
+                   (numJ && botNumberOnly && numJ === botNumberOnly)
+        }) || text.includes(botNumberOnly) || text.includes(`@${botNumberOnly}`)
 
         if (!isMentioned) return
 
