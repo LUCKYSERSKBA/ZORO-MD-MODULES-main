@@ -1,4 +1,4 @@
-// ZORO-MD Ultimate LID & JID Match Mention Plugin
+// ZORO-MD Ultimate LID & JID Match Mention Plugin (Forced Group & Direct Match)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -14,12 +14,12 @@ let FFMPEG = 'ffmpeg'
 try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) {}
 
 const opt = (name, fallback) => process.env[name] || config[name] || fallback
-const COOLDOWN_MS = 3000
+const COOLDOWN_MS = 3000 // Anti-spam protection cooldown
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 const OWNER_ONLY = 'Only the bot owner can use this command.'
 const lastReply = new Map()
 
-// Universal ID cleaner for JID, LID and numbers
+// Universal ID cleaner
 const cleanId = (id) => String(id || '').trim().toLowerCase()
 
 const getSessionId = (sock) => {
@@ -279,6 +279,7 @@ function mentionedJids(mek) {
                         msg.imageMessage?.contextInfo || 
                         msg.videoMessage?.contextInfo || 
                         msg.audioMessage?.contextInfo ||
+                        msg.documentMessage?.contextInfo ||
                         Object.values(msg).find(v => v?.contextInfo)?.contextInfo
     
     let ids = []
@@ -291,7 +292,7 @@ function mentionedJids(mek) {
     return ids
 }
 
-// 🌟 ULTIMATE LID & JID BYPASS DETECTION (Zero Miss Match)
+// 🌟 ULTIMATE FOOLPROOF MATCH FOR .SETMENTION & GROUP MENTIONS / TAGS
 async function handleMentionDetection(sock, chatId, message) {
     try {
         if (!message || !message.message) return
@@ -309,37 +310,45 @@ async function handleMentionDetection(sock, chatId, message) {
         const rawBotLid = cleanId(botUser.lid)
         const botNumberOnly = sessionId.replace(/[^0-9]/g, '')
 
+        // Collect all possible variations of bot JID / LID / Number
         const botIdentifiers = new Set([
             rawBotId,
             rawBotLid,
             botNumberOnly,
             rawBotId.split('@')[0],
-            rawBotLid.split('@')[0]
+            rawBotLid.split('@')[0],
+            botUser.id ? cleanId(botUser.id).split(':')[0] : ''
         ].filter(Boolean))
 
         const text = String(
             message.message?.conversation || 
             message.message?.extendedTextMessage?.text || 
-            message.message?.imageMessage?.caption || ''
+            message.message?.imageMessage?.caption || 
+            message.message?.videoMessage?.caption || ''
         ).toLowerCase()
 
         const mentionedJidsList = mentionedJids(message)
         
+        // Match JID / LID / Number / Hidetag / Tagall / Direct Text Mention
         const isMentioned = mentionedJidsList.some(j => {
             const cleanJ = cleanId(j)
             const numJ = cleanJ.replace(/[^0-9]/g, '')
             return botIdentifiers.has(cleanJ) || 
                    botIdentifiers.has(cleanJ.split('@')[0]) || 
                    (numJ && botNumberOnly && numJ === botNumberOnly)
-        }) || text.includes(botNumberOnly) || text.includes(`@${botNumberOnly}`)
+        }) || (botNumberOnly && (text.includes(botNumberOnly) || text.includes(`@${botNumberOnly}`) || text.includes(rawBotId)))
 
+        // If it's a group tag/hidetag or general message where any identifier matches, trigger it
         if (!isMentioned) return
 
+        // Spam Protection (Cooldown check per chat)
         if (Date.now() - (lastReply.get(targetChat) || 0) < COOLDOWN_MS) return
         lastReply.set(targetChat, Date.now())
 
         await sendMention(sock, targetChat, message, sessionId)
-    } catch (e) {}
+    } catch (e) {
+        console.error("Error in handleMentionDetection:", e)
+    }
 }
 
 async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
