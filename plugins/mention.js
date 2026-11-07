@@ -1,4 +1,4 @@
-// ZORO-MD Mention Plugin (Multi-User, Isolated MongoDB, Auto-Cleanup on Logout & PTT Support)
+// ZORO-MD Final Bulletproof Mention Plugin (MongoDB, PTT, Universal LID & JID Match)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -8,7 +8,6 @@ const { spawn } = require('child_process')
 const { downloadContentFromMessage } = require('@aadhixd777/baileys')
 const config = require('../config')
 
-// 🌟 MongoDB Schema with Session Isolation
 const MentionData = mongoose.models.MentionData || mongoose.model('MentionData', new mongoose.Schema({
     sessionId: { type: String, unique: true, index: true },
     audios: [Buffer],
@@ -20,11 +19,12 @@ const MentionData = mongoose.models.MentionData || mongoose.model('MentionData',
 const dataCache = new Map()
 const dbReady = () => mongoose.connection.readyState === 1
 
+const cleanNum = (jid) => String(jid || '').replace(/[^0-9]/g, '')
+
 const getSessionId = (sock) => {
     const botUser = sock.user || {}
     const botJid = botUser.id ? (sock.decodeJid ? sock.decodeJid(botUser.id) : botUser.id) : ''
-    const botNum = botJid ? botJid.split('@')[0].split(':')[0] : ''
-    return botNum || config.SESSION_ID || "default_session"
+    return cleanNum(botJid) || config.SESSION_ID || "default_session"
 }
 
 async function getData(sessionId) {
@@ -71,10 +71,10 @@ async function withTemp(fn) {
 }
 
 let FFMPEG = 'ffmpeg'
-try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) { /* system ffmpeg */ }
+try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) {}
 
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024
-const COOLDOWN_MS = 4000
+const COOLDOWN_MS = 2000 // സ്പാം തടയാൻ ചെറിയ കോൾഡൗൺ
 const lastReply = new Map()
 
 const toVoiceNote = (input) => withTemp(async (dir) => {
@@ -138,7 +138,6 @@ async function loadDefaultAudio(src) {
     return result
 }
 
-// 🌟 Send Mention as PTT Voice Note
 async function sendMention(conn, to, quotedMek, sessionId) {
     const d = await getData(sessionId)
     if (d.status !== 'on') return false
@@ -162,7 +161,7 @@ async function sendMention(conn, to, quotedMek, sessionId) {
     return true
 }
 
-// 🌟 Robust Mention Detection with Session Tracking
+// 🌟 BULLETPROOF MENTION DETECTION (Zero Failure Universal Match)
 async function handleMentionDetection(sock, chatId, message) {
     try {
         if (!message || !message.message) return
@@ -173,12 +172,14 @@ async function handleMentionDetection(sock, chatId, message) {
 
         const sessionId = getSessionId(sock)
         const botNum = sessionId
+        if (!botNum) return
 
         const d = await getData(sessionId)
         if (d.status !== 'on') return
 
         const msg = message.message || {}
         
+        // എല്ലാതരം ContextInfo-കളും പരതുന്നു
         const contextInfo = msg.extendedTextMessage?.contextInfo || 
                             msg.imageMessage?.contextInfo || 
                             msg.videoMessage?.contextInfo || 
@@ -187,38 +188,35 @@ async function handleMentionDetection(sock, chatId, message) {
                             msg.stickerMessage?.contextInfo ||
                             msg.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
                             msg.viewOnceMessage?.message?.extendedTextMessage?.contextInfo ||
-                            msg.templateButtonReplyMessage?.contextInfo ||
                             Object.values(msg).find(v => v?.contextInfo)?.contextInfo
 
-        let mentionedJidsList = []
+        let mentionedList = []
         if (contextInfo && Array.isArray(contextInfo.mentionedJid)) {
-            mentionedJidsList = contextInfo.mentionedJid
+            mentionedList = mentionedList.concat(contextInfo.mentionedJid)
         }
-
         if (Array.isArray(msg.extendedTextMessage?.mentionedJid)) {
-            mentionedJidsList = mentionedJidsList.concat(msg.extendedTextMessage.mentionedJid)
+            mentionedList = mentionedList.concat(msg.extendedTextMessage.mentionedJid)
         }
         if (Array.isArray(msg.mentionedJid)) {
-            mentionedJidsList = mentionedJidsList.concat(msg.mentionedJid)
+            mentionedList = mentionedList.concat(msg.mentionedJid)
         }
 
-        const isBotMentioned = mentionedJidsList.some(jid => {
-            const cleanJid = String(jid || '').split('@')[0].split(':')[0]
-            return botNum && cleanJid === botNum
-        })
+        // Universal Clean Number Match (LID & JID Bypass)
+        const isMentioned = mentionedList.some(jid => cleanNum(jid) === botNum)
 
+        // Text / Number mention fallback
         const textContent = (
             msg.conversation || 
             msg.extendedTextMessage?.text || 
             msg.imageMessage?.caption || 
-            msg.videoMessage?.caption || 
-            msg.documentMessage?.caption || ''
+            msg.videoMessage?.caption || ''
         ).toString()
 
-        const isTextMentioned = botNum && (textContent.includes(botNum) || textContent.includes(`@${botNum}`))
+        const isTextMatch = textContent.includes(botNum) || textContent.includes(`@${botNum}`)
 
-        if (!isBotMentioned && !isTextMentioned) return
+        if (!isMentioned && !isTextMatch) return
 
+        // Cooldown check
         if (Date.now() - (lastReply.get(targetChat) || 0) < COOLDOWN_MS) return
         lastReply.set(targetChat, Date.now())
 
@@ -228,7 +226,6 @@ async function handleMentionDetection(sock, chatId, message) {
     }
 }
 
-// 🌟 Mention Toggle Command
 async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
     try {
         if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
@@ -246,7 +243,6 @@ async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
     }
 }
 
-// 🌟 Set Mention Command with Auto-Cleanup trigger support
 async function setMentionCommand(sock, chatId, message, isOwner) {
     try {
         if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
@@ -265,23 +261,23 @@ async function setMentionCommand(sock, chatId, message, isOwner) {
             const res = await axios.get(url, { responseType: 'arraybuffer' })
             const audio = await toVoiceNote(Buffer.from(res.data))
             await saveData(sessionId, { audios: [audio], kind: 'audio' }, ['audio', 'mediaSrc'])
-            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved for this session!` }, { quoted: message })
+            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from URL!` }, { quoted: message })
         }
 
         if (sel && ['audioMessage', 'videoMessage'].includes(sel.type)) {
             const audio = await toVoiceNote(await downloadMedia(sel))
             await saveData(sessionId, { audios: [audio], kind: 'audio' }, ['audio', 'mediaSrc'])
-            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from reply for this session!` }, { quoted: message })
+            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from reply!` }, { quoted: message })
         }
 
         if (sub === 'reset' || sub === 'remove' || sub === 'delete') {
             await resetData(sessionId)
-            return sock.sendMessage(chatId, { text: '✅ Mention settings completely reset for this session!' }, { quoted: message })
+            return sock.sendMessage(chatId, { text: '✅ Mention settings completely reset!' }, { quoted: message })
         }
 
         if (sub === 'test' || sub === 'preview') {
             const ok = await sendMention(sock, chatId, message, sessionId)
-            if (!ok) return sock.sendMessage(chatId, { text: `❌ Mention is currently OFF or no voice note is set for this session yet!` }, { quoted: message })
+            if (!ok) return sock.sendMessage(chatId, { text: `❌ Mention is OFF or no voice set yet!` }, { quoted: message })
             return
         }
 
@@ -299,17 +295,13 @@ async function setMentionCommand(sock, chatId, message, isOwner) {
     }
 }
 
-// 🌟 5. Auto-Cleanup Hook: Called when session logs out or disconnects permanently
 async function cleanupOnLogout(sock) {
     try {
         const sessionId = getSessionId(sock)
-        if (sessionId && sessionId !== "default_session") {
+        if (sessionId) {
             await resetData(sessionId)
-            console.log(`[MENTION CLEANUP]: Cleared MongoDB data for logged-out session: ${sessionId}`)
         }
-    } catch (e) {
-        console.log('[CLEANUP ERROR]:', e.message)
-    }
+    } catch (e) {}
 }
 
 module.exports = { handleMentionDetection, mentionToggleCommand, setMentionCommand, cleanupOnLogout }
