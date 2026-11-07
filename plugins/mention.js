@@ -1,23 +1,23 @@
-// ZORO-MD Final Bulletproof Mention Plugin (MongoDB, PTT, Universal LID & JID Match)
+// ZORO-MD Advanced Mention Plugin (Integrated with Custom Waveforms, Multi-Audio, MongoDB Isolation & PTT)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const axios = require('axios')
+const dns = require('dns').promises
+const net = require('net')
 const mongoose = require('mongoose')
 const { spawn } = require('child_process')
 const { downloadContentFromMessage } = require('@aadhixd777/baileys')
 const config = require('../config')
 
-const MentionData = mongoose.models.MentionData || mongoose.model('MentionData', new mongoose.Schema({
-    sessionId: { type: String, unique: true, index: true },
-    audios: [Buffer],
-    audio: Buffer,
-    kind: String,
-    status: { type: String, default: 'on' }
-}, { collection: 'mentiondata' }))
+let FFMPEG = 'ffmpeg'
+try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) { /* system ffmpeg */ }
 
-const dataCache = new Map()
-const dbReady = () => mongoose.connection.readyState === 1
+const opt = (name, fallback) => process.env[name] || config[name] || fallback
+const COOLDOWN_MS = 3000 // സുഗമമായ പ്രവർത്തനത്തിന് ചെറിയ കോൾഡൗൺ
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024
+const OWNER_ONLY = 'Only the bot owner can use this command.'
+const lastReply = new Map()
 
 const cleanNum = (jid) => String(jid || '').replace(/[^0-9]/g, '')
 
@@ -27,21 +27,34 @@ const getSessionId = (sock) => {
     return cleanNum(botJid) || config.SESSION_ID || "default_session"
 }
 
+const MentionData = mongoose.models.MentionData || mongoose.model('MentionData', new mongoose.Schema({
+    sessionId: { type: String, unique: true, index: true },
+    audios: [Buffer],
+    audio: Buffer,
+    kind: String,
+    wave: String,
+    status: { type: String, default: 'on' }
+}, { collection: 'mentiondata' }))
+
+const dataCache = new Map()
+const dbReady = () => mongoose.connection.readyState === 1
+
 async function getData(sessionId) {
     if (dataCache.has(sessionId)) return dataCache.get(sessionId)
-    if (!dbReady()) return { status: 'on', audios: [] }
+    if (!dbReady()) return { status: 'on', audios: [], wave: 'random' }
     try {
         const doc = await MentionData.findOne({ sessionId })
         const audios = (doc && Array.isArray(doc.audios) ? doc.audios : []).filter(a => a && a.length).map(a => Buffer.from(a))
         if (!audios.length && doc && doc.audio && doc.audio.length) audios.push(Buffer.from(doc.audio))
         const data = { 
             audios, 
+            wave: (doc && doc.wave) || 'random',
             status: doc && doc.status ? doc.status : 'on'
         }
         dataCache.set(sessionId, data)
         return data
     } catch (e) {
-        return { status: 'on', audios: [] }
+        return { status: 'on', audios: [], wave: 'random' }
     }
 }
 
@@ -54,14 +67,111 @@ async function saveData(sessionId, fields, unset = []) {
         update.$unset = Object.fromEntries(unsetKeys.map(k => [k, 1]))
     }
     if (Object.keys(update).length === 0) return
-    await MentionData.findOneAndUpdate({ sessionId }, update, { upsert: true })
+    try {
+        await MentionData.findOneAndUpdate({ sessionId }, update, { upsert: true })
+    } catch (e) {
+        throw e
+    }
     dataCache.delete(sessionId)
 }
 
 async function resetData(sessionId) {
-    if (!dbReady()) return
     await MentionData.deleteOne({ sessionId })
     dataCache.delete(sessionId)
+}
+
+const dnsCb = require('dns')
+const fallbackResolver = new dns.Resolver()
+try { fallbackResolver.setServers(['1.1.1.1', '8.8.8.8']) } catch (e) {}
+const DNS_RETRY = ['ENOTFOUND', 'EAI_AGAIN', 'ESERVFAIL', 'ETIMEOUT', 'ETIMEDOUT']
+
+async function lookupAll(host) {
+    try {
+        return await dns.lookup(host, { all: true })
+    } catch (err) {
+        if (!DNS_RETRY.includes(err.code)) throw err
+        try {
+            const addrs = await fallbackResolver.resolve4(host)
+            if (addrs.length) return addrs.map(a => ({ address: a, family: 4 }))
+        } catch (e) {}
+        throw err
+    }
+}
+
+function smartLookup(hostname, options, cb) {
+    if (typeof options === 'function') { cb = options; options = {} }
+    dnsCb.lookup(hostname, options, (err, address, family) => {
+        if (!err) return cb(null, address, family)
+        if (!DNS_RETRY.includes(err.code)) return cb(err)
+        fallbackResolver.resolve4(hostname).then(addrs => {
+            if (!addrs.length) return cb(err)
+            if (options && options.all) return cb(null, addrs.map(a => ({ address: a, family: 4 })))
+            cb(null, addrs[0], 4)
+        }).catch(() => cb(err))
+    })
+}
+
+function isPrivateIp(ip) {
+    if (net.isIPv6(ip)) {
+        const v = ip.toLowerCase()
+        if (v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80')) return true
+        const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+        return mapped ? isPrivateIp(mapped[1]) : false
+    }
+    const [a, b] = ip.split('.').map(Number)
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+}
+
+async function assertPublic(u) {
+    const url = new URL(u)
+    if (!/^https?:$/.test(url.protocol)) throw new Error('BAD_URL')
+    const host = url.hostname.replace(/^\[|\]$/g, '')
+    const addrs = net.isIP(host) ? [{ address: host }] : await lookupAll(host)
+    if (!addrs.length || addrs.some(a => isPrivateIp(a.address))) throw new Error('BLOCKED_URL')
+}
+
+async function fetchBuffer(u, maxBytes = MAX_MEDIA_BYTES, hops = 4) {
+    let current = u
+    for (let i = 0; i <= hops; i++) {
+        let res
+        try {
+            await assertPublic(current)
+            res = await axios.get(current, {
+                responseType: 'stream', maxRedirects: 0, timeout: 30000, lookup: smartLookup,
+                validateStatus: st => st < 400, headers: { 'User-Agent': 'Mozilla/5.0' }
+            })
+        } catch (e) {
+            try { e.host = new URL(current).hostname } catch (_) {}
+            throw e
+        }
+        if (res.status >= 300 && res.headers.location) {
+            res.data.destroy()
+            current = new URL(res.headers.location, current).href
+            await assertPublic(current)
+            continue
+        }
+        if (Number(res.headers['content-length']) > maxBytes) { res.data.destroy(); throw new Error('FILE_TOO_LARGE') }
+        const chunks = []
+        let size = 0
+        for await (const c of res.data) {
+            size += c.length
+            if (size > maxBytes) { res.data.destroy(); throw new Error('FILE_TOO_LARGE') }
+            chunks.push(c)
+        }
+        return { buffer: Buffer.concat(chunks), contentType: String(res.headers['content-type'] || '').toLowerCase() }
+    }
+    throw new Error('TOO_MANY_REDIRECTS')
+}
+
+function runFfmpeg(args, collect = false) {
+    return new Promise((resolve, reject) => {
+        const p = spawn(FFMPEG, args, { stdio: ['ignore', collect ? 'pipe' : 'ignore', 'ignore'] })
+        const chunks = []
+        if (collect) p.stdout.on('data', c => chunks.push(c))
+        p.on('error', () => reject(new Error('NO_FFMPEG')))
+        p.on('close', code => code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error('FFMPEG_FAILED')))
+    })
 }
 
 async function withTemp(fn) {
@@ -70,21 +180,39 @@ async function withTemp(fn) {
     finally { fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}) }
 }
 
-let FFMPEG = 'ffmpeg'
-try { FFMPEG = require('ffmpeg-static') || 'ffmpeg' } catch (e) {}
+const WAVE_BARS = 64
+const clamp = (v) => Math.max(2, Math.min(100, Math.round(v)))
+const rnd = (a, b) => a + Math.random() * (b - a)
+const WAVE_STYLES = [
+    () => { const f = rnd(2, 5); return i => 50 + 45 * Math.sin((i / WAVE_BARS) * Math.PI * 2 * f) },
+    () => i => (i % 2 ? 95 : 6),
+    () => i => 8 + 92 * (1 - Math.abs(i - WAVE_BARS / 2) / (WAVE_BARS / 2)),
+    () => i => 8 + 92 * (Math.abs(i - WAVE_BARS / 2) / (WAVE_BARS / 2)),
+    () => i => 10 + Math.floor(i / 8) * 12,
+    () => i => 100 - Math.floor(i / 8) * 12,
+    () => { const gap = Math.floor(rnd(10, 16)); return i => { const k = i % gap; return k === 2 ? 95 : k === 3 ? 6 : k === 4 ? 70 : 10 } },
+    () => () => rnd(4, 100),
+    () => i => 50 + (i / WAVE_BARS) * 48 * Math.sin(i * 0.9),
+    () => i => (Math.floor(i / 4) % 2 ? 8 : 92),
+    () => i => 8 + 90 * Math.exp(-Math.pow((i - WAVE_BARS / 2) / 12, 2)) + rnd(-6, 6)
+]
 
-const MAX_MEDIA_BYTES = 20 * 1024 * 1024
-const COOLDOWN_MS = 2000 // സ്പാം തടയാൻ ചെറിയ കോൾഡൗൺ
-const lastReply = new Map()
+const DNA_STYLES = [
+    () => { const ph = rnd(0, 6.28); return i => 50 + 44 * Math.sin(i * 0.45 + ph) * (i % 2 ? 1 : -1) },
+    () => { const ph = rnd(0, 6.28); return i => 50 + 44 * Math.sin(i * 0.9 + ph) * (i % 2 ? 1 : -1) }
+]
+
+function funnyWaveform(mode) {
+    const pool = mode === 'dna' ? DNA_STYLES : WAVE_STYLES.concat(DNA_STYLES)
+    const fn = pool[Math.floor(Math.random() * pool.length)]()
+    return new Uint8Array(Array.from({ length: WAVE_BARS }, (_, i) => clamp(fn(i))))
+}
 
 const toVoiceNote = (input) => withTemp(async (dir) => {
     const inFile = path.join(dir, 'in'), outFile = path.join(dir, 'out.ogg')
     await fs.promises.writeFile(inFile, input)
-    return new Promise((resolve, reject) => {
-        const p = spawn(FFMPEG, ['-y', '-i', inFile, '-vn', '-t', '60', '-c:a', 'libopus', '-b:a', '48k', '-ar', '48000', '-ac', '1', '-f', 'ogg', outFile])
-        p.on('error', () => reject(new Error('NO_FFMPEG')))
-        p.on('close', code => code === 0 ? fs.promises.readFile(outFile).then(resolve).catch(reject) : reject(new Error('FFMPEG_FAILED')))
-    })
+    await runFfmpeg(['-y', '-i', inFile, '-vn', '-t', '60', '-c:a', 'libopus', '-b:a', '48k', '-ar', '48000', '-ac', '1', '-f', 'ogg', outFile])
+    return fs.promises.readFile(outFile)
 })
 
 const MEDIA_TYPES = ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage']
@@ -115,7 +243,7 @@ async function downloadMedia(sel) {
 }
 
 function findDefaultAudioSource() {
-    const set = process.env.MENTION_AUDIO || config.MENTION_AUDIO
+    const set = opt('MENTION_AUDIO')
     if (set) return set
     for (const f of ['mention.mp3', 'mention.ogg', 'mention.opus', 'mention.m4a', 'mention.wav']) {
         if (fs.existsSync(path.join(__dirname, '..', 'media', f))) return path.join('media', f)
@@ -128,8 +256,7 @@ async function loadDefaultAudio(src) {
     if (defaultAudioCache.has(src)) return defaultAudioCache.get(src)
     let input
     if (/^https?:\/\//i.test(src)) {
-        const res = await axios.get(src, { responseType: 'arraybuffer' })
-        input = Buffer.from(res.data)
+        input = (await fetchBuffer(src, 15 * 1024 * 1024)).buffer
     } else {
         input = await fs.promises.readFile(path.resolve(__dirname, '..', src))
     }
@@ -156,9 +283,28 @@ async function sendMention(conn, to, quotedMek, sessionId) {
     await conn.sendMessage(to, {
         audio,
         mimetype: 'audio/ogg; codecs=opus',
-        ptt: true
+        ptt: true,
+        waveform: funnyWaveform(d.wave)
     }, { quoted: quotedMek })
     return true
+}
+
+function mentionedJids(mek) {
+    const msg = mek.message || {}
+    const contextInfo = msg.extendedTextMessage?.contextInfo || 
+                        msg.imageMessage?.contextInfo || 
+                        msg.videoMessage?.contextInfo || 
+                        msg.audioMessage?.contextInfo ||
+                        Object.values(msg).find(v => v?.contextInfo)?.contextInfo
+    
+    let ids = []
+    if (contextInfo && Array.isArray(contextInfo.mentionedJid)) {
+        ids = ids.concat(contextInfo.mentionedJid)
+    }
+    if (Array.isArray(msg.extendedTextMessage?.mentionedJid)) {
+        ids = ids.concat(msg.extendedTextMessage.mentionedJid)
+    }
+    return ids
 }
 
 // 🌟 BULLETPROOF MENTION DETECTION (Zero Failure Universal Match)
@@ -177,121 +323,137 @@ async function handleMentionDetection(sock, chatId, message) {
         const d = await getData(sessionId)
         if (d.status !== 'on') return
 
-        const msg = message.message || {}
-        
-        // എല്ലാതരം ContextInfo-കളും പരതുന്നു
-        const contextInfo = msg.extendedTextMessage?.contextInfo || 
-                            msg.imageMessage?.contextInfo || 
-                            msg.videoMessage?.contextInfo || 
-                            msg.audioMessage?.contextInfo ||
-                            msg.documentMessage?.contextInfo ||
-                            msg.stickerMessage?.contextInfo ||
-                            msg.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
-                            msg.viewOnceMessage?.message?.extendedTextMessage?.contextInfo ||
-                            Object.values(msg).find(v => v?.contextInfo)?.contextInfo
+        const botNums = new Set([
+            botNum,
+            cleanNum(sock.user?.id),
+            cleanNum(sock.user?.lid),
+            sock.user?.id,
+            sock.user?.lid
+        ].filter(Boolean))
 
-        let mentionedList = []
-        if (contextInfo && Array.isArray(contextInfo.mentionedJid)) {
-            mentionedList = mentionedList.concat(contextInfo.mentionedJid)
-        }
-        if (Array.isArray(msg.extendedTextMessage?.mentionedJid)) {
-            mentionedList = mentionedList.concat(msg.extendedTextMessage.mentionedJid)
-        }
-        if (Array.isArray(msg.mentionedJid)) {
-            mentionedList = mentionedList.concat(msg.mentionedJid)
-        }
+        const text = String(
+            message.message?.conversation || 
+            message.message?.extendedTextMessage?.text || 
+            message.message?.imageMessage?.caption || ''
+        )
 
-        // Universal Clean Number Match (LID & JID Bypass)
-        const isMentioned = mentionedList.some(jid => cleanNum(jid) === botNum)
+        const mentionedJidsList = mentionedJids(message)
+        const isMentioned = mentionedJidsList.some(j => botNums.has(j) || botNums.has(cleanNum(j))) ||
+                            text.includes(botNum) || text.includes(`@${botNum}`)
 
-        // Text / Number mention fallback
-        const textContent = (
-            msg.conversation || 
-            msg.extendedTextMessage?.text || 
-            msg.imageMessage?.caption || 
-            msg.videoMessage?.caption || ''
-        ).toString()
+        if (!isMentioned) return
 
-        const isTextMatch = textContent.includes(botNum) || textContent.includes(`@${botNum}`)
-
-        if (!isMentioned && !isTextMatch) return
-
-        // Cooldown check
         if (Date.now() - (lastReply.get(targetChat) || 0) < COOLDOWN_MS) return
         lastReply.set(targetChat, Date.now())
 
         await sendMention(sock, targetChat, message, sessionId)
-    } catch (err) {
-        console.log('[MENTION ERROR]:', err.message)
-    }
+    } catch (e) {}
 }
 
 async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
     try {
-        if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
+        if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
         const v = (args || '').trim().toLowerCase()
-        if (v !== 'on' && v !== 'off') {
-            return sock.sendMessage(chatId, { text: `╭─❖ 『 📣 ᴍᴇɴᴛɪᴏɴ ꜱᴛᴀᴛᴜꜱ 』 ❖\n│ • Usage: .mention on\n│ • Usage: .mention off\n╰──────────────⍟` }, { quoted: message })
-        }
         const sessionId = getSessionId(sock)
+        if (v !== 'on' && v !== 'off') {
+            const d = await getData(sessionId)
+            return sock.sendMessage(chatId, { text: `Mention reply is *${d.status === 'off' ? 'OFF' : 'ON'}*\n\nUsage: .mention on | off` }, { quoted: message })
+        }
         await saveData(sessionId, { status: v })
-        
-        const statusText = v === 'on' ? '🟢 ENABLED (Voice Note Active)' : '🔴 DISABLED (Silenced)'
-        return sock.sendMessage(chatId, { text: `✅ Mention reply feature is now *${statusText}* for this session!` }, { quoted: message })
-    } catch (e) {
-        return sock.sendMessage(chatId, { text: `❌ Error: ${e.message}` }, { quoted: message })
+        return sock.sendMessage(chatId, { text: `Mention reply turned *${v.toUpperCase()}*` }, { quoted: message })
+    } catch (e) { 
+        return sock.sendMessage(chatId, { text: `${e}` }, { quoted: message }) 
     }
 }
 
-async function setMentionCommand(sock, chatId, message, isOwner) {
-    try {
-        if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
-        if (!dbReady()) return sock.sendMessage(chatId, { text: '❌ Database is offline!' }, { quoted: message })
+const MAX_LINKS = 5
 
-        const raw = (message.message?.conversation || message.message?.extendedTextMessage?.text || '').trim()
+function parseFormat(q) {
+    const text = q.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'")
+    const urls = [...new Set((text.match(/https?:\/\/[^\s,]+/gi) || []).map(u => u.replace(/[)\].;]+$/, '')))]
+    const type = ((text.match(/type\/(audio|video|image|text)/i) || [])[1] || '').toLowerCase() || null
+    return { urls, type }
+}
+
+async function applyFormat(sessionId, q) {
+    const { urls, type } = parseFormat(q)
+    if (!urls.length) throw new Error('BAD_FORMAT')
+    if (type && type !== 'audio') throw new Error('ONLY_AUDIO')
+    if (urls.length > MAX_LINKS) throw new Error('TOO_MANY_LINKS')
+
+    const audios = []
+    for (const u of urls) audios.push(await toVoiceNote((await fetchBuffer(u)).buffer))
+
+    await saveData(sessionId, { audios, kind: 'audio' }, ['audio', 'mediaSrc'])
+    return audios.length
+}
+
+const FORMAT_HELP = (p) =>
+    `╭─❖ 『 ꜰᴏʀᴍᴀᴛ 』 ❖\n` +
+    `│ ➱ ${p}setmention <link> type/audio\n` +
+    `│ ➱ ${p}setmention <link1>,<link2>,<link3> type/audio\n` +
+    `│ ➱ Reply to an audio / video: ${p}setmention\n` +
+    `│ ➱ ${p}setmention wave dna | random\n` +
+    `│ ➱ ${p}setmention test\n` +
+    `│ ➱ ${p}setmention reset\n` +
+    `│ ➱ ${p}mention on | off\n` +
+    `╰──────────────⍟`
+
+async function setMentionCommand(sock, chatId, message, args, isOwner) {
+    try {
+        if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
+        if (!dbReady()) return sock.sendMessage(chatId, { text: 'Database is offline' }, { quoted: message })
+
+        const raw = (args || '').trim()
         const parts = raw.split(/\s+/).filter(Boolean)
-        const sub = (parts[1] || '').toLowerCase()
+        const sub = (parts[0] || '').toLowerCase()
         const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage
+        const sel = pickMedia(quoted)
         const sessionId = getSessionId(sock)
 
-        const sel = pickMedia(quoted)
-
-        if (/^(https?:\/\/)/i.test(parts[1])) {
-            const url = parts[1]
-            const res = await axios.get(url, { responseType: 'arraybuffer' })
-            const audio = await toVoiceNote(Buffer.from(res.data))
-            await saveData(sessionId, { audios: [audio], kind: 'audio' }, ['audio', 'mediaSrc'])
-            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from URL!` }, { quoted: message })
+        if (/^(https?:\/\/|type\/)/i.test(raw)) {
+            const count = await applyFormat(sessionId, raw)
+            return sock.sendMessage(chatId, { text: `Mention saved: ${count} voice note${count > 1 ? 's' : ''}\nTry it: .setmention test` }, { quoted: message })
         }
 
-        if (sel && ['audioMessage', 'videoMessage'].includes(sel.type)) {
+        if (sel && ['audioMessage', 'videoMessage'].includes(sel.type) && (!sub || sub === 'audio' || sub === 'vn')) {
             const audio = await toVoiceNote(await downloadMedia(sel))
             await saveData(sessionId, { audios: [audio], kind: 'audio' }, ['audio', 'mediaSrc'])
-            return sock.sendMessage(chatId, { text: `✅ Mention voice note successfully saved from reply!` }, { quoted: message })
+            return sock.sendMessage(chatId, { text: `Mention voice note saved.\nTry it: .setmention test` }, { quoted: message })
         }
+
+        if (sub === 'wave') {
+            const mode = (parts[1] || '').toLowerCase()
+            if (mode !== 'dna' && mode !== 'random') {
+                const d0 = await getData(sessionId)
+                return sock.sendMessage(chatId, { text: `Wave style: *${(d0.wave || 'random').toUpperCase()}*\nUsage: .setmention wave dna | random` }, { quoted: message })
+            }
+            await saveData(sessionId, { wave: mode })
+            return sock.sendMessage(chatId, { text: `Wave style set to *${mode.toUpperCase()}*\nTry it: .setmention test` }, { quoted: message })
+        }
+
+        if (sub === 'audio' || sub === 'vn') return sock.sendMessage(chatId, { text: `Reply to an audio or voice note with *.setmention*` }, { quoted: message })
 
         if (sub === 'reset' || sub === 'remove' || sub === 'delete') {
             await resetData(sessionId)
-            return sock.sendMessage(chatId, { text: '✅ Mention settings completely reset!' }, { quoted: message })
+            return sock.sendMessage(chatId, { text: 'Mention settings removed. Defaults will be used.' }, { quoted: message })
         }
-
         if (sub === 'test' || sub === 'preview') {
             const ok = await sendMention(sock, chatId, message, sessionId)
-            if (!ok) return sock.sendMessage(chatId, { text: `❌ Mention is OFF or no voice set yet!` }, { quoted: message })
+            if (!ok) return sock.sendMessage(chatId, { text: `No voice note is set yet. Use *.setmention <link> type/audio* first.` }, { quoted: message })
             return
         }
 
+        const d = await getData(sessionId)
         return sock.sendMessage(chatId, {
-            text: `╭─❖ 『 📣 ᴍᴇɴᴛɪᴏɴ ꜱᴇᴛᴛɪɴɢꜱ ᴍᴇɴᴜ 』 ❖\n` +
-                  `│ • .mention on / off\n` +
-                  `│ • .setmention <direct-audio-link>\n` +
-                  `│ • Reply audio/video with .setmention\n` +
-                  `│ • .setmention test\n` +
-                  `│ • .setmention reset\n` +
-                  `╰──────────────⍟`
+            text: `╭─❖ 『 📣 ᴍᴇɴᴛɪᴏɴ ꜱᴇᴛᴛɪɴɢꜱ 』 ❖\n` +
+                  `│ ✦ ꜱᴛᴀᴛᴜꜱ ➱ ${d.status === 'off' ? 'OFF' : 'ON'}\n` +
+                  `│ ✦ ᴡᴀᴠᴇ ➱ ${(d.wave || 'random').toUpperCase()}\n` +
+                  `│ ✦ ᴠᴏɪᴄᴇ ɴᴏᴛᴇꜱ ➱ ${d.audios && d.audios.length ? d.audios.length + ' custom' : 'default'}\n` +
+                  `╰──────────────⍟\n\n` + FORMAT_HELP('.')
         }, { quoted: message })
-    } catch (e) {
-        return sock.sendMessage(chatId, { text: `❌ Error: ${e.message}` }, { quoted: message })
+    } catch (e) { 
+        return sock.sendMessage(chatId, { text: `>Error: ${e.message}` }, { quoted: message }) 
     }
 }
 
@@ -304,4 +466,27 @@ async function cleanupOnLogout(sock) {
     } catch (e) {}
 }
 
-module.exports = { handleMentionDetection, mentionToggleCommand, setMentionCommand, cleanupOnLogout }
+module.exports = { 
+    handleMentionDetection, 
+    mentionToggleCommand: async (sock, chatId, message, args, isOwner) => {
+        await mentionToggleCommandInternal(sock, chatId, message, args, isOwner)
+    }, 
+    setMentionCommand: async (sock, chatId, message, isOwner) => {
+        const raw = (message.message?.conversation || message.message?.extendedTextMessage?.text || '').trim()
+        const q = raw.split(/\s+/).slice(1).join(' ')
+        await setMentionCommand(sock, chatId, message, q, isOwner)
+    }, 
+    cleanupOnLogout 
+}
+
+async function mentionToggleCommandInternal(sock, chatId, message, q, isOwner) {
+    if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
+    const v = (q || '').trim().toLowerCase()
+    const sessionId = getSessionId(sock)
+    if (v !== 'on' && v !== 'off') {
+        const d = await getData(sessionId)
+        return sock.sendMessage(chatId, { text: `Mention reply is *${d.status === 'off' ? 'OFF' : 'ON'}*\n\nUsage: .mention on | off` }, { quoted: message })
+    }
+    await saveData(sessionId, { status: v })
+    return sock.sendMessage(chatId, { text: `Mention reply turned *${v.toUpperCase()}*` }, { quoted: message })
+}
