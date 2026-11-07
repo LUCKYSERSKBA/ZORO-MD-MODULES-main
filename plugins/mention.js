@@ -325,7 +325,6 @@ async function handleMentionDetection(sock, chatId, message) {
 
         const mentionedJidsList = mentionedJids(message)
         
-        // Check if any mentioned JID/LID matches bot or if text contains bot number/handle
         const isMentioned = mentionedJidsList.some(j => {
             const cleanJ = cleanId(j)
             const numJ = cleanJ.replace(/[^0-9]/g, '')
@@ -346,14 +345,14 @@ async function handleMentionDetection(sock, chatId, message) {
 async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
     try {
         if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
-        const v = (args || '').trim().toLowerCase()
+        const q = (args || '').trim().toLowerCase()
         const sessionId = getSessionId(sock)
-        if (v !== 'on' && v !== 'off') {
+        if (q !== 'on' && q !== 'off') {
             const d = await getData(sessionId)
             return sock.sendMessage(chatId, { text: `Mention reply is *${d.status === 'off' ? 'OFF' : 'ON'}*\n\nUsage: .mention on | off` }, { quoted: message })
         }
-        await saveData(sessionId, { status: v })
-        return sock.sendMessage(chatId, { text: `Mention reply turned *${v.toUpperCase()}*` }, { quoted: message })
+        await saveData(sessionId, { status: q })
+        return sock.sendMessage(chatId, { text: `Mention reply turned *${q.toUpperCase()}*` }, { quoted: message })
     } catch (e) { 
         return sock.sendMessage(chatId, { text: `${e}` }, { quoted: message }) 
     }
@@ -462,7 +461,8 @@ async function cleanupOnLogout(sock) {
 module.exports = { 
     handleMentionDetection, 
     mentionToggleCommand: async (sock, chatId, message, args, isOwner) => {
-        await mentionToggleCommandInternal(sock, chatId, message, args, isOwner)
+        const q = (args || '').trim()
+        await mentionToggleCommand(sock, chatId, message, q, isOwner)
     }, 
     setMentionCommand: async (sock, chatId, message, isOwner) => {
         const raw = (message.message?.conversation || message.message?.extendedTextMessage?.text || '').trim()
@@ -470,16 +470,4 @@ module.exports = {
         await setMentionCommand(sock, chatId, message, q, isOwner)
     }, 
     cleanupOnLogout 
-}
-
-async function mentionToggleCommandInternal(sock, chatId, message, q, isOwner) {
-    if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
-    const v = (q || '').trim().toLowerCase()
-    const sessionId = getSessionId(sock)
-    if (v !== 'on' && v !== 'off') {
-        const d = await getData(sessionId)
-        return sock.sendMessage(chatId, { text: `Mention reply is *${d.status === 'off' ? 'OFF' : 'ON'}*\n\nUsage: .mention on | off` }, { quoted: message })
-    }
-    await saveData(sessionId, { status: v })
-    return sock.sendMessage(chatId, { text: `Mention reply turned *${v.toUpperCase()}*` }, { quoted: message })
 }
