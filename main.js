@@ -98,8 +98,8 @@ const { handleAntilinkCommand, handleLinkDetection } = require('./plugins/antili
 const { handleAntitagCommand, handleTagDetection } = require('./plugins/antitag');
 const { Antilink } = require('./lib/antilink');
 
-// 🌟 Updated Mention Import
-const { handleMentionDetection, mentionToggleCommand, setMentionCommand } = require('./plugins/mention');
+// 🌟 Updated Mention Import (Added cleanupOnLogout for auto-cleanup on session disconnect/logout)
+const { handleMentionDetection, mentionToggleCommand, setMentionCommand, cleanupOnLogout } = require('./plugins/mention');
 
 const memeCommand = require('./plugins/meme');
 const tagCommand = require('./plugins/tag');
@@ -1217,9 +1217,24 @@ async function handleGroupParticipantUpdate(sock, update) {
     }
 }
 
+// 🌟 Logout / Disconnect Cleanup Handler Hook (Ensures MongoDB space is freed on session logout/disconnect)
+async function handleConnectionUpdate(sock, update) {
+    try {
+        const { connection, lastDisconnect } = update;
+        if (connection === 'close') {
+            if (typeof cleanupOnLogout === 'function') {
+                await cleanupOnLogout(sock);
+            }
+        }
+    } catch (e) {
+        console.error('Error in handleConnectionUpdate cleanup:', e);
+    }
+}
+
 module.exports = {
     handleMessages,
     handleGroupParticipantUpdate,
+    handleConnectionUpdate, // Exported for auto session cleanup on logout
     handleStatus: async (sock, status) => {
         await handleStatusUpdate(sock, status);
     }
