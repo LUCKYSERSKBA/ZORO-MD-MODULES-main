@@ -1147,7 +1147,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
             case 'obfuscate':
                 await obfuscateCommand(sock, chatId, message, parsedCmd.args.join(' '));
-                commandExecuted = true;
                 break;
             default:
                 if (isGroup) {
@@ -1155,6 +1154,8 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                         await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                     }
                     await handleTagDetection(sock, chatId, message, senderId);
+                    // 🌟 മെൻഷൻ പ്ലഗിൻ ഡിഫോൾട്ട് കേസിൽ കൂടി ഉൾപ്പെടുത്തിയിരിക്കുന്നു
+                    await handleMentionDetection(sock, chatId, message);
                 }
                 commandExecuted = false;
                 break;
