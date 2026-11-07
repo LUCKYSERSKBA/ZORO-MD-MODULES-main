@@ -8,7 +8,7 @@ const { spawn } = require('child_process')
 const { downloadContentFromMessage } = require('@aadhixd777/baileys')
 const config = require('../config')
 
-// 🌟 പുതിയ മോംഗോ ഡിബി കണക്ഷൻ യു.ആർ.എൽ
+// 🌟 മോംഗോ ഡിബി കണക്ഷൻ യു.ആർ.എൽ
 const MONGO_URI = "mongodb+srv://xdleoxd33_db_user:5Sm5Z3UQLcbKVnSj@cluster0.uh9hwjg.mongodb.net/"
 
 let FFMPEG = 'ffmpeg'
@@ -149,7 +149,7 @@ async function loadDefaultAudio(src) {
     return result
 }
 
-// 🌟 മെൻഷൻ ചെയ്യുമ്പോൾ വോയിസ് നോട്ട് (PTT) ആയി അയക്കുന്ന പ്രധാന ഫങ്ഷൻ
+// 🌟 മെൻഷൻ ചെയ്യുമ്പോൾ വോയിസ് നോട്ട് (PTT) ആയി അയക്കുന്ന ഫങ്ഷൻ
 async function sendMention(conn, to, quotedMek, sessionId) {
     const d = await getData(sessionId)
     let audio = null
@@ -174,7 +174,7 @@ async function sendMention(conn, to, quotedMek, sessionId) {
 
 const numOf = (jid) => String(jid || '').split('@')[0].split(':')[0]
 
-// 🌟 ഗ്രൂപ്പിലോ ചാറ്റിലോ വാട്സാപ്പ് ടാഗ് (@) വഴി മെൻഷൻ ചെയ്യുന്നത് 100% പെർഫെക്റ്റ് ആയി ഡിറ്റക്റ്റ് ചെയ്യുന്ന ഫങ്ഷൻ
+// 🌟 ഗ്രൂപ്പിലോ ചാറ്റിലോ വാട്സാപ്പ് ടാഗ് (@) വഴി മെൻഷൻ ചെയ്യുന്നത് LID സപ്പോർട്ടോടെ ഡിറ്റക്റ്റ് ചെയ്യുന്ന ഫങ്ഷൻ
 async function handleMentionDetection(sock, chatId, message) {
     try {
         if (!message || !message.message) return
@@ -186,11 +186,9 @@ async function handleMentionDetection(sock, chatId, message) {
         const botUser = sock.user || {}
         const botJid = botUser.id ? (sock.decodeJid ? sock.decodeJid(botUser.id) : botUser.id) : ''
         const botNum = botJid ? botJid.split('@')[0].split(':')[0] : ''
-        const sessionId = botNum || "default_session"
 
         const msg = message.message || {}
         
-        // WhatsApp-ൽ ഗ്രൂപ്പിലായാലും ചാറ്റിലായാലും @ ഇട്ട് ടാഗ് ചെയ്യുമ്പോൾ വരുന്ന contextInfo സുരക്ഷിതമായി പരതുന്നു
         const contextInfo = msg.extendedTextMessage?.contextInfo || 
                             msg.imageMessage?.contextInfo || 
                             msg.videoMessage?.contextInfo || 
@@ -206,19 +204,20 @@ async function handleMentionDetection(sock, chatId, message) {
             mentionedJidsList = contextInfo.mentionedJid
         }
 
-        const textContent = (msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '').toString()
-        
-        // ബോട്ടിന്റെ നമ്പർ ടാഗ് ലിസ്റ്റിൽ ഉണ്ടോ അതല്ലെങ്കിൽ ടെക്സ്റ്റിൽ ഉണ്ടോ എന്ന് നോക്കുന്നു
         const isBotMentioned = mentionedJidsList.some(jid => {
             const cleanJid = String(jid || '').split('@')[0].split(':')[0]
             return botNum && cleanJid === botNum
-        }) || (botNum && textContent.includes(botNum))
+        })
 
-        if (!isBotMentioned) return
+        const textContent = (msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '').toString()
+        const isTextMentioned = botNum && textContent.includes(botNum)
+
+        if (!isBotMentioned && !isTextMentioned) return
 
         if (Date.now() - (lastReply.get(targetChat) || 0) < COOLDOWN_MS) return
         lastReply.set(targetChat, Date.now())
 
+        const sessionId = botNum || "default_session"
         await sendMention(sock, targetChat, message, sessionId)
     } catch (err) {
         console.log('[MENTION ERROR]:', err.message)
@@ -239,7 +238,7 @@ async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
     }
 }
 
-// 🌟 `.setmention` കമാൻഡ് ഹാൻഡ്‌ലർ (ലിങ്ക് സേവ് ചെയ്യാൻ)
+// 🌟 `.setmention` കമാൻഡ് ഹാൻഡ്‌ലർ
 async function setMentionCommand(sock, chatId, message, isOwner) {
     try {
         if (!isOwner) return sock.sendMessage(chatId, { text: '❌ Only bot owner can use this command!' }, { quoted: message })
@@ -283,7 +282,7 @@ async function setMentionCommand(sock, chatId, message, isOwner) {
 
         sock.sendMessage(chatId, {
             text: `╭─❖ 『 📣 ᴍᴇɴᴛɪᴏɴ ꜱᴇᴛᴛɪɴɢꜱ 』 ❖\n` +
-                  `│ • .setmention <link> type/audio\n` +
+                  `│ • .setmention <link>\n` +
                   `│ • Reply to audio with .setmention\n` +
                   `│ • .setmention test\n` +
                   `│ • .setmention reset\n` +
