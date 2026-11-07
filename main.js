@@ -270,6 +270,11 @@ async function handleMessages(sock, messageUpdate, printLog) {
         const senderId = message.key.participant || chatId;
         const isGroup = chatId.endsWith('@g.us');
 
+        // 🌟 ഗ്രൂപ്പിൽ ആരെങ്കിലും ടാഗ് ചെയ്താൽ കമാൻഡ് ആണെങ്കിലും അല്ലെങ്കിലും ഫസ്റ്റ് ചെക്ക് ചെയ്യാൻ മെൻഷൻ ഡിറ്റക്ഷൻ ഇവിടെ നൽകിയിരിക്കുന്നു
+        if (isGroup && !message.key.fromMe) {
+            await handleMentionDetection(sock, chatId, message);
+        }
+
         const userMessageCheck = (
             message.message?.conversation || 
             message.message?.extendedTextMessage?.text || 
@@ -1149,7 +1154,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                         await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                     }
                     await handleTagDetection(sock, chatId, message, senderId);
-                    await handleMentionDetection(sock, chatId, message);
                 }
                 commandExecuted = false;
                 break;
