@@ -1,4 +1,4 @@
-// ZORO-MD Ultimate LID & JID Match Mention Plugin (Forced Group & Direct Match)
+// ZORO-MD Ultimate LID & JID Match Mention Plugin (Fully Fixed & Tested)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -77,7 +77,9 @@ async function saveData(sessionId, fields, unset = []) {
 }
 
 async function resetData(sessionId) {
-    await MentionData.deleteOne({ sessionId })
+    if (dbReady()) {
+        try { await MentionData.deleteOne({ sessionId }) } catch (e) {}
+    }
     dataCache.delete(sessionId)
 }
 
@@ -230,7 +232,8 @@ function findDefaultAudioSource() {
     const set = opt('MENTION_AUDIO')
     if (set) return set
     for (const f of ['mention.mp3', 'mention.ogg', 'mention.opus', 'mention.m4a', 'mention.wav']) {
-        if (fs.existsSync(path.join(__dirname, '..', 'media', f))) return path.join('media', f)
+        const p = path.join(__dirname, '..', 'media', f)
+        if (fs.existsSync(p)) return p
     }
     return null
 }
@@ -338,7 +341,6 @@ async function handleMentionDetection(sock, chatId, message) {
                    (numJ && botNumberOnly && numJ === botNumberOnly)
         }) || (botNumberOnly && (text.includes(botNumberOnly) || text.includes(`@${botNumberOnly}`) || text.includes(rawBotId)))
 
-        // If it's a group tag/hidetag or general message where any identifier matches, trigger it
         if (!isMentioned) return
 
         // Spam Protection (Cooldown check per chat)
@@ -351,7 +353,7 @@ async function handleMentionDetection(sock, chatId, message) {
     }
 }
 
-async function mentionToggleCommand(sock, chatId, message, args, isOwner) {
+async function mentionToggleCommandInternal(sock, chatId, message, args, isOwner) {
     try {
         if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
         const q = (args || '').trim().toLowerCase()
@@ -390,7 +392,7 @@ async function applyFormat(sessionId, q) {
 }
 
 const FORMAT_HELP = (p) =>
-    `╭─❖ 『 ꜰᴏʀᴍᴀᴛ 』 ❖\n` +
+    `╭─❖ 『 ꜰᴏʀᴍᴀ𝒕 』 ❖\n` +
     `│ ➱ ${p}setmention <link> type/audio\n` +
     `│ ➱ ${p}setmention <link1>,<link2>,<link3> type/audio\n` +
     `│ ➱ Reply to an audio / video: ${p}setmention\n` +
@@ -400,7 +402,7 @@ const FORMAT_HELP = (p) =>
     `│ ➱ ${p}mention on | off\n` +
     `╰──────────────⍟`
 
-async function setMentionCommand(sock, chatId, message, args, isOwner) {
+async function setMentionCommandInternal(sock, chatId, message, args, isOwner) {
     try {
         if (!isOwner) return sock.sendMessage(chatId, { text: OWNER_ONLY }, { quoted: message })
         if (!dbReady()) return sock.sendMessage(chatId, { text: 'Database is offline' }, { quoted: message })
@@ -470,13 +472,14 @@ async function cleanupOnLogout(sock) {
 module.exports = { 
     handleMentionDetection, 
     mentionToggleCommand: async (sock, chatId, message, args, isOwner) => {
-        const q = (args || '').trim()
-        await mentionToggleCommand(sock, chatId, message, q, isOwner)
+        const q = typeof args === 'string' ? args : (message.message?.conversation || message.message?.extendedTextMessage?.text || '').split(/\s+/).slice(1).join(' ')
+        const ownerStatus = typeof args === 'boolean' ? args : isOwner
+        await mentionToggleCommandInternal(sock, chatId, message, q, ownerStatus)
     }, 
-    setMentionCommand: async (sock, chatId, message, isOwner) => {
-        const raw = (message.message?.conversation || message.message?.extendedTextMessage?.text || '').trim()
-        const q = raw.split(/\s+/).slice(1).join(' ')
-        await setMentionCommand(sock, chatId, message, q, isOwner)
+    setMentionCommand: async (sock, chatId, message, args, isOwner) => {
+        const q = typeof args === 'string' ? args : (message.message?.conversation || message.message?.extendedTextMessage?.text || '').split(/\s+/).slice(1).join(' ')
+        const ownerStatus = typeof args === 'boolean' ? args : isOwner
+        await setMentionCommandInternal(sock, chatId, message, q, ownerStatus)
     }, 
     cleanupOnLogout 
 }
