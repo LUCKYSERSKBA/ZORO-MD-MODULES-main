@@ -1,4 +1,4 @@
-const Const = require("../settings");
+const Settings = require("../settings");
 const MenuSettings = require("../database/model");
 const os = require('os');
 const fs = require('fs');
@@ -40,11 +40,10 @@ function getEastAfricaDate() {
 
 async function helpCommand(sock, chatId, message) {
     let helpMessage = '';
-    try {
-        const rennzModule = await import("@rennzsync/baileys");
-        const A2UI = rennzModule.A2UI || rennzModule.default?.A2UI;
-        const sendA2UIWidget = rennzModule.sendA2UIWidget || rennzModule.default?.sendA2UIWidget;
+    let vcardReply = null;
+    let finalMediaUrl = defaultMenuImageUrl;
 
+    try {
         const start = Date.now();
         const ping = Math.round((Date.now() - start) / 2);
 
@@ -56,7 +55,7 @@ async function helpCommand(sock, chatId, message) {
         const userId = message.key.participant || message.key.remoteJid;
         const customSettings = await MenuSettings.findOne({ userId: userId });
 
-        const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuImageUrl;
+        finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuImageUrl;
 
         let thumbnailBuffer = null;
         let base64Image = '';
@@ -88,7 +87,7 @@ async function helpCommand(sock, chatId, message) {
             'END:VCARD'
         ].filter(Boolean).join('\n');
 
-        const vcardReply = {
+        vcardReply = {
             key: {
                 fromMe: false,
                 participant: '0@s.whatsapp.net',
@@ -110,7 +109,7 @@ async function helpCommand(sock, chatId, message) {
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
 ┃ ❍ 𝐔𝐩𝐭𝐢𝐦𝐞 : ${uptimeFormatted}
-┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Const.version || '3.0.0'}
+┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Settings.version || '3.0.0'}
 ┃ ❍ 𝐏𝐫𝐞𝐟𝐢𝐱 : .
 ╰═════════════════⊷
 
@@ -340,60 +339,107 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝙳 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
+        const rennzModule = await import("@rennzsync/baileys");
+        const A2UI = rennzModule.A2UI || rennzModule.default?.A2UI;
+        const sendA2UIWidget = rennzModule.sendA2UIWidget || rennzModule.default?.sendA2UIWidget;
+
         if (A2UI && sendA2UIWidget) {
             const ui = new A2UI();
             
-            // a2ui.js ക്ലാസ് നിർദ്ദേശപ്രകാരം വാലിഡേഷൻ എററുകൾ ഒഴിവാക്കാൻ variant ആവശ്യാനുസരണം സെറ്റ് ചെയ്യുന്നു
             const imgComp = ui.image(finalMediaUrl, { variant: 'header' });
             const textComp = ui.text(helpMessage.trim(), { variant: 'body' });
             ui.root([imgComp, textComp]);
 
-            // ഡിസ്പ്ലേ ടെക്സ്റ്റുകൾ പൂർണ്ണമായി ഒഴിവാക്കി ഐക്കണുകൾ മാത്രം നൽകിയിരിക്കുന്നു
             const buttons = [
                 {
-                    name: 'quick_reply',
+                    name: 'cta_url',
                     params: JSON.stringify({
-                        id: '.menu',
-                        icon: 'document'
+                        display_text: '',
+                        url: 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24',
+                        merchant_url: 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24'
                     })
                 },
                 {
-                    name: 'quick_reply',
+                    name: 'cta_call',
                     params: JSON.stringify({
-                        id: '.ping',
-                        icon: 'thumb_up'
+                        display_text: '',
+                        phone_number: '+918136880986'
                     })
                 },
                 {
-                    name: 'quick_reply',
+                    name: 'cta_url',
                     params: JSON.stringify({
-                        id: '.owner',
-                        icon: 'tag'
+                        display_text: '',
+                        url: 'https://www.instagram.com/aadhi.x._______________?srtk=MWd5a21oeGtpZzNqYw==',
+                        merchant_url: 'https://www.instagram.com/aadhi.x._______________?srtk=MWd5a21oeGtpZzNqYw=='
                     })
                 }
             ];
 
-            console.log("🚀 Sending A2UI Widget Menu with official a2ui.js logic...");
             await sock.sendMessage(chatId, { text: " " }, { quoted: vcardReply });
             await sendA2UIWidget(sock, chatId, {
                 a2ui: ui,
-                bodyText: "ZORO XMD MENU",
-                footer: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕",
+                bodyText: "",
+                footer: "",
                 buttons: buttons
             });
-            console.log("✅ SUCCESS: A2UI Widget successfully sent!");
         } else {
-            throw new Error("A2UI module could not be loaded.");
+            throw new Error("A2UI module not available, falling back to rich-menu CTA format.");
         }
 
     } catch (error) {
-        console.error('🚨 ========================================');
-        console.error('❌ ZORO MD A2UI MENU EXECUTION FAILED');
-        console.error('📌 Error Message:', error.message);
-        console.error('📌 Full Stack Trace:', error.stack);
-        console.error('🚨 ========================================');
+        console.error('⚠️ A2UI Widget failed, triggering rich-menu style CTA fallback:', error.message);
         
-        await sock.sendMessage(chatId, { text: helpMessage || '🟢 Zoro MD Menu is active!' }, { quoted: message });
+        // റിച്ച് മെനുവിലെ അതേ nativeFlowMessage ലോജിക് പ്രകാരമുള്ള ഫാൾബാപ്പ് ബാക്കപ്പ്
+        const { generateWAMessageFromContent } = await import("@rennzsync/baileys");
+        const { buildNativeFlowButton } = await import("./rich-menu.js").catch(() => ({}));
+
+        const fallbackButtons = [
+            {
+                type: 'cta_url',
+                displayText: 'Channel',
+                url: 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24'
+            },
+            {
+                type: 'cta_call',
+                displayText: 'WhatsApp',
+                phoneNumber: '+918136880986'
+            },
+            {
+                type: 'cta_url',
+                displayText: 'Instagram',
+                url: 'https://www.instagram.com/aadhi.x._______________?srtk=MWd5a21oeGtpZzNqYw=='
+            }
+        ];
+
+        // ഒരുവേള rich-menu.js ഫങ്ഷൻ ലഭ്യമാണെങ്കിൽ അത് വഴിയും അല്ലെങ്കിൽ ഡയറക്ട് മാപ്പായിട്ടും ബട്ടൺ തയ്യാറാക്കുന്നു
+        const formattedButtons = typeof buildNativeFlowButton === 'function' 
+            ? fallbackButtons.map(b => buildNativeFlowButton(b))
+            : fallbackButtons.map(b => ({
+                name: b.type,
+                buttonParamsJson: JSON.stringify(b.type === 'cta_call' ? { display_text: b.displayText, phone_number: b.phoneNumber } : { display_text: b.displayText, url: b.url, merchant_url: b.url })
+            }));
+
+        const fallbackContent = {
+            interactiveMessage: {
+                header: {
+                    hasMediaAttachment: true,
+                    imageMessage: {
+                        url: finalMediaUrl
+                    }
+                },
+                body: {
+                    text: helpMessage.trim()
+                },
+                nativeFlowMessage: {
+                    buttons: formattedButtons,
+                    messageVersion: 1
+                }
+            }
+        };
+
+        const backupMsg = generateWAMessageFromContent(chatId, fallbackContent, { userJid: sock.user?.id });
+        await sock.relayMessage(chatId, backupMsg.message, { messageId: backupMsg.key.id, quoted: vcardReply || message });
     }
 }
 
