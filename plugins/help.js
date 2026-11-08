@@ -324,7 +324,7 @@ ${readMoreKey}
 ┃ ❍ .𝐧𝐚𝐦𝐞𝐜𝐚𝐫𝐝
 ┃ ❍ .𝐨𝐨𝐠𝐰𝐚𝐲
 ┃ ❍ .𝐭𝐰𝐞𝐞𝐭
-┃ ❍ .𝐲𝐭𝐜𝐨𝐞𝐧𝐭
+┃ ❍ .𝐲𝐭𝐜𝐨𝐞𝐧ْت
 ┃ ❍ .𝐜𝐨𝐦𝐫𝐚𝐝𝐞
 ┃ ❍ .𝐠𝐚𝐲
 ┃ ❍ .𝐠𝐥𝐚𝐬𝐬
@@ -343,15 +343,16 @@ ${readMoreKey}
         if (A2UI && sendA2UIWidget) {
             const ui = new A2UI();
             
-            const imgComp = ui.image(finalMediaUrl, { variant: 'cover' });
+            // a2ui.js ക്ലാസ് നിർദ്ദേശപ്രകാരം വാലിഡേഷൻ എററുകൾ ഒഴിവാക്കാൻ variant ആവശ്യാനുസരണം സെറ്റ് ചെയ്യുന്നു
+            const imgComp = ui.image(finalMediaUrl, { variant: 'header' });
             const textComp = ui.text(helpMessage.trim(), { variant: 'body' });
             ui.root([imgComp, textComp]);
 
+            // ഡിസ്പ്ലേ ടെക്സ്റ്റുകൾ പൂർണ്ണമായി ഒഴിവാക്കി ഐക്കണുകൾ മാത്രം നൽകിയിരിക്കുന്നു
             const buttons = [
                 {
                     name: 'quick_reply',
                     params: JSON.stringify({
-                        display_text: '',
                         id: '.menu',
                         icon: 'document'
                     })
@@ -359,7 +360,6 @@ ${readMoreKey}
                 {
                     name: 'quick_reply',
                     params: JSON.stringify({
-                        display_text: '',
                         id: '.ping',
                         icon: 'thumb_up'
                     })
@@ -367,14 +367,13 @@ ${readMoreKey}
                 {
                     name: 'quick_reply',
                     params: JSON.stringify({
-                        display_text: '',
                         id: '.owner',
                         icon: 'tag'
                     })
                 }
             ];
 
-            console.log("🚀 Sending A2UI Widget Menu...");
+            console.log("🚀 Sending A2UI Widget Menu with official a2ui.js logic...");
             await sock.sendMessage(chatId, { text: " " }, { quoted: vcardReply });
             await sendA2UIWidget(sock, chatId, {
                 a2ui: ui,
@@ -382,7 +381,7 @@ ${readMoreKey}
                 footer: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕",
                 buttons: buttons
             });
-            console.log("✅ SUCCESS: A2UI Widget sent!");
+            console.log("✅ SUCCESS: A2UI Widget successfully sent!");
         } else {
             throw new Error("A2UI module could not be loaded.");
         }
