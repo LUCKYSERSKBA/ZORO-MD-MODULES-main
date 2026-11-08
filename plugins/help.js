@@ -1,5 +1,5 @@
 import { A2UI, sendA2UIWidget } from '../lib/a2ui.js';
-import Settings from '../settings.js'; // അല്ലെങ്കിൽ settings-ന്റെ രീതി അനുസരിച്ച്
+import Settings from '../settings.js';
 import MenuSettings from '../database/model.js';
 import os from 'os';
 import fs from 'fs';
@@ -39,7 +39,7 @@ function getEastAfricaDate() {
     return `${day}/${month}/${year}`;
 }
 
-export default async function helpCommand(sock, chatId, message) {
+async function helpCommand(sock, chatId, message) {
     try {
         const start = Date.now();
         const ping = Math.round((Date.now() - start) / 2);
@@ -391,3 +391,5 @@ ${readMoreKey}
         await sock.sendMessage(chatId, { text: '🟢 Zoro MD Menu is active!' }, { quoted: message });
     }
 }
+
+module.exports = helpCommand;
