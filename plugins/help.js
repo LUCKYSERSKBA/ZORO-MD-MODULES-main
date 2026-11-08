@@ -1,11 +1,12 @@
+import { A2UI, sendA2UIWidget } from '../lib/a2ui.js';
 const Settings = require("../settings");
 const MenuSettings = require("../database/model");
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const { randomBytes, randomUUID } = require('crypto');
 
+const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
 const defaultMenuImageUrl = "https://files.catbox.moe/49bust.jpg";
 
 function formatTime(seconds) {
@@ -39,9 +40,6 @@ function getEastAfricaDate() {
 }
 
 async function helpCommand(sock, chatId, message) {
-    let helpMessage = '';
-    let finalMediaUrl = defaultMenuImageUrl;
-
     try {
         const start = Date.now();
         const ping = Math.round((Date.now() - start) / 2);
@@ -53,12 +51,56 @@ async function helpCommand(sock, chatId, message) {
 
         const userId = message.key.participant || message.key.remoteJid;
         const customSettings = await MenuSettings.findOne({ userId: userId });
+        const finalMediaUrl = customSettings && customSettings.mediaUrl ? customSettings.mediaUrl : defaultMenuImageUrl;
 
-        finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuImageUrl;
+        let thumbnailBuffer = null;
+        let base64Image = '';
+        
+        try {
+            const response = await fetch(vcardImageUrl, { signal: AbortSignal.timeout(4000) });
+            if (response.ok) {
+                const arrayBuffer = await response.arrayBuffer();
+                const buffer = Buffer.from(arrayBuffer);
+
+                thumbnailBuffer = await sharp(buffer)
+                    .resize(200, 200, { fit: 'cover', position: 'center' })
+                    .jpeg({ quality: 80, progressive: true })
+                    .toBuffer();
+                
+                base64Image = thumbnailBuffer.toString('base64');
+            }
+        } catch (err) {
+            console.log('⚠️ Menu vcard image processing bypassed safely:', err.message);
+        }
+
+        const vcardName = "Aadhi Xd";
+        const vcard = [
+            'BEGIN:VCARD',
+            'VERSION:3.0',
+            `N:;${vcardName};;;`,
+            `FN:${vcardName}`,
+            base64Image ? `PHOTO;ENCODING=b;TYPE=JPEG:${base64Image}` : '',
+            'END:VCARD'
+        ].filter(Boolean).join('\n');
+
+        const vcardReply = {
+            key: {
+                fromMe: false,
+                participant: '0@s.whatsapp.net',
+                remoteJid: 'status@broadcast'
+            },
+            message: {
+                contactMessage: {
+                    displayName: vcardName,
+                    vcard: vcard,
+                    jpegThumbnail: thumbnailBuffer || undefined
+                }
+            }
+        };
 
         const readMoreKey = '\u200b'.repeat(3000);
 
-        helpMessage = `╭══════════════⊷
+        const helpMessage = `╭══════════════⊷
 ┃ ❍ 𝐔𝐬𝐞𝐫 : ${userName}
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
@@ -124,15 +166,15 @@ ${readMoreKey}
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐭𝐚𝐠
 ┃ ❍ .𝐰𝐞𝐥𝐜𝐨𝐦𝐞
 ┃ ❍ .𝐠𝐨𝐨𝐝𝐛𝐲𝐞
-┃ ❍ .𝐬𝐭𝐠𝐝𝐞𝐬𝚌
-┃ ❍ .𝐬𝐭𝐠𝐧𝐚𝐦𝐞
-┃ ❍ .𝐬𝐭𝐠𝐩𝐩
+┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞𝐬𝐜
+┃ ❍ .𝐬𝐞𝐭𝐠𝐧𝐚𝐦𝐞
+┃ ❍ .𝐬𝐞𝐭𝐠𝐩𝐩
 ┃ ❍ .𝐠𝐞𝐭𝐠𝐫𝐨𝐮𝐩𝐩
 ┃ ❍ .𝐠𝐫𝐨𝐮𝐩𝐢𝐝
 ┃ ❍ .𝐜𝐥𝐨𝐬𝐞
 ┃ ❍ .𝐨𝐩𝐞𝐧
 ┃ ❍ .𝐚𝐩𝐩𝐫𝐨𝐯𝐞𝐚𝐥𝚕
-┃ ❍ .𝐝isapproval𝚕
+┃ ❍ .𝐝𝐢𝐬𝐚𝐩𝐩𝐫𝐨𝐯𝐞𝐚𝐥𝚕
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐬𝐭𝐢𝐜𝐤𝐞𝐫
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐛𝐨𝐭
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐟𝐨𝐫𝐰𝐚𝐫𝐝
@@ -277,7 +319,7 @@ ${readMoreKey}
 ┃ ❍ .𝐧𝐚𝐦𝐞𝐜𝐚𝐫𝐝
 ┃ ❍ .𝐨𝐨𝐠𝐰𝐚𝐲
 ┃ ❍ .𝐭𝐰𝐞𝐞𝐭
-┃ ❍ .𝐲𝐭𝐜𝐨𝐞𝐧ْت
+┃ ❍ .𝐲𝐭𝐜𝐨𝐞𝐧𝐭
 ┃ ❍ .𝐜𝐨𝐦𝐫𝐚𝐝𝐞
 ┃ ❍ .𝐠𝐚𝐲
 ┃ ❍ .𝐠𝐥𝐚𝐬𝐬
@@ -289,75 +331,61 @@ ${readMoreKey}
 ┃ ❍ .𝐬𝐜
 ┃ ❍ .𝐬𝐜𝐫𝐢𝐩𝐭
 ┃ ❍ .𝐫𝐞𝐩𝐨
-╰══════════════⊷
-> 𝒁𝑶𝑹𝑶 𝐗𝐌𝙳 ⟩ - Bᴏᴛ v0.0.1
+╰═════════════════⊷
+> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        const { generateWAMessageFromContent } = await import("@rennzsync/baileys");
+        // 1. ആദ്യം മെനു ഇമേജും ഒറിജിനൽ ക്യാപ്ഷനും അയക്കുന്നു
+        await sock.sendMessage(chatId, {
+            image: { url: finalMediaUrl },
+            caption: helpMessage.trim(),
+            contextInfo: {
+                forwardingScore: 999,
+                isForwarded: true,
+                forwardedNewsletterMessageInfo: {
+                    newsletterJid: '120363321456789012@newsletter',
+                    newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                    serverMessageId: 100
+                }
+            }
+        }, { quoted: vcardReply });
 
-        const buttons = [
+        // 2. വാട്സാപ്പ് നേറ്റീവ് പച്ച ഐക്കണുകളോട് കൂടിയ 3 ബട്ടണുകൾ സെറ്റ് ചെയ്യുന്നു
+        const ui = new A2UI();
+        const actionText = ui.text('✨ *ZORO-MD Actions*', { variant: 'body' });
+        ui.root([actionText]);
+
+        const a2uiButtons = [
             {
                 name: 'cta_url',
-                params: JSON.stringify({
-                    display_text: 'Channel',
-                    url: 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24',
-                    merchant_url: 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24'
-                })
-            },
-            {
-                name: 'cta_call',
-                params: JSON.stringify({
-                    display_text: 'WhatsApp',
-                    phone_number: '+918136880986'
-                })
+                params: {
+                    display_text: '🌐 Dashboard',
+                    url: 'https://github.com/Aadhixd777',
+                    merchant_url: 'https://github.com/Aadhixd777'
+                }
             },
             {
                 name: 'cta_url',
-                params: JSON.stringify({
-                    display_text: 'Instagram',
-                    url: 'https://www.instagram.com/aadhi.x._______________?srtk=MWd5a21oeGtpZzNqYw==',
-                    merchant_url: 'https://www.instagram.com/aadhi.x._______________?srtk=MWd5a21oeGtpZzNqYw=='
-                })
+                params: {
+                    display_text: '📦 Open Repo',
+                    url: 'https://github.com/Aadhixd777',
+                    merchant_url: 'https://github.com/Aadhixd777'
+                }
+            },
+            {
+                name: 'quick_reply',
+                params: {
+                    display_text: '⚡ Ping Status',
+                    id: 'ping'
+                }
             }
         ];
 
-        const nativeFlowMessage = {
-            buttons: buttons.map(b => ({
-                name: b.name,
-                buttonParamsJson: b.params
-            })),
-            messageParamsJson: '{}',
-            messageVersion: 1
-        };
-
-        const interactiveMessage = {
-            header: {
-                hasMediaAttachment: true,
-                imageMessage: { url: finalMediaUrl }
-            },
-            body: {
-                text: helpMessage.trim()
-            },
-            nativeFlowMessage
-        };
-
-        const msg = generateWAMessageFromContent(chatId, {
-            messageContextInfo: { messageSecret: randomBytes(32) },
-            interactiveMessage
-        }, { quoted: message, userJid: sock.user?.id || sock.authState?.creds?.me?.id });
-
-        await sock.relayMessage(chatId, msg.message, {
-            messageId: msg.key.id,
-            additionalNodes: [
-                {
-                    tag: 'biz',
-                    attrs: { actual_actors: '2', host_storage: '2', privacy_mode_ts: String(Math.floor(Date.now() / 1e3)) },
-                    content: [
-                        { tag: 'interactive', attrs: { type: 'native_flow', v: '1' }, content: [{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' } }] },
-                        { tag: 'quality_control', attrs: { decision_id: randomUUID().replace(/-/g, ''), source_type: 'third_party' }, content: [{ tag: 'decision_source', attrs: { value: 'df' } }] }
-                    ]
-                }
-            ]
+        await sendA2UIWidget(sock, chatId, {
+            a2ui: ui,
+            bodyText: 'Select an option:',
+            footer: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫',
+            buttons: a2uiButtons
         });
 
     } catch (error) {
