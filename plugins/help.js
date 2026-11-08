@@ -1,6 +1,5 @@
 const Const = require("../settings");
 const MenuSettings = require("../database/model");
-const { proto } = require("@rennzsync/baileys"); // `@rennzsync/baileys` പ്രോട്ടോക്കോൾ മാത്രം
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -41,6 +40,15 @@ function getEastAfricaDate() {
 
 async function helpCommand(sock, chatId, message) {
     try {
+        // ഡൈനാമിക് ആയി ESM പാക്കേജ് ലോഡ് ചെയ്യുന്നു (ERR_REQUIRE_ASYNC_MODULE ഫുൾ ഒഴിവാക്കാൻ)
+        let proto;
+        try {
+            const rennzModule = await import("@rennzsync/baileys");
+            proto = rennzModule.proto || rennzModule.default?.proto;
+        } catch (err) {
+            proto = require("@aadhixd777/baileys").proto;
+        }
+
         const start = Date.now();
         const ping = Math.round((Date.now() - start) / 2);
 
@@ -168,7 +176,7 @@ ${readMoreKey}
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐭𝐚𝐠
 ┃ ❍ .𝐰𝐞𝐥𝐜𝐨𝐦𝐞
 ┃ ❍ .𝐠𝐨𝐨𝐝𝐛𝐲𝐞
-┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞𝐬𝐜
+┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞𝐬𝚌
 ┃ ❍ .𝐬𝐞𝐭𝐠𝐧𝐚𝐦𝐞
 ┃ ❍ .𝐬𝐞𝐭𝐠𝐩𝐩
 ┃ ❍ .𝐠𝐞𝐭𝐠𝐫𝐨𝐮𝐩𝐩
@@ -345,7 +353,7 @@ ${readMoreKey}
                             text: helpMessage.trim()
                         }),
                         footer: proto.Message.InteractiveMessage.Footer.create({
-                            text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂"
+                            text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕"
                         }),
                         nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
                             buttons: [
@@ -386,7 +394,7 @@ ${readMoreKey}
                     isForwarded: true,
                     forwardedNewsletterMessageInfo: {
                         newsletterJid: '120363321456789012@newsletter',
-                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝐎𝒇𝒇𝚒𝚌𝚒𝚊',
                         serverMessageId: 100
                     }
                 }
@@ -402,7 +410,7 @@ ${readMoreKey}
                     isForwarded: true,
                     forwardedNewsletterMessageInfo: {
                         newsletterJid: '120363321456789012@newsletter',
-                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝐎𝒇𝒇𝚒𝚌𝚒𝚊',
                         serverMessageId: 100
                     }
                 }
