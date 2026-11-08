@@ -1,13 +1,13 @@
-import { A2UI, sendA2UIWidget } from '../lib/a2ui.js';
-import Settings from '../settings.js';
-import MenuSettings from '../database/model.js';
-import os from 'os';
-import fs from 'fs';
-import path from 'path';
-import sharp from 'sharp';
+const { A2UI, sendA2UIWidget } = require('../lib/a2ui.js');
+const Settings = require("../settings");
+const MenuSettings = require("../database/model");
+const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
 
 const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
-const defaultMenuImageUrl = "https://files.catbox.moe/49bust.jpg";
+const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4";
 
 function formatTime(seconds) {
     const days = Math.floor(seconds / (24 * 60 * 60));
@@ -51,7 +51,9 @@ async function helpCommand(sock, chatId, message) {
 
         const userId = message.key.participant || message.key.remoteJid;
         const customSettings = await MenuSettings.findOne({ userId: userId });
-        const finalMediaUrl = customSettings && customSettings.mediaUrl ? customSettings.mediaUrl : defaultMenuImageUrl;
+
+        const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuVideoUrl;
+        const isImageMedia = customSettings ? customSettings.mediaType === 'image' : false;
 
         let thumbnailBuffer = null;
         let base64Image = '';
@@ -105,7 +107,7 @@ async function helpCommand(sock, chatId, message) {
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
 ┃ ❍ 𝐔𝐩𝐭𝐢𝐦𝐞 : ${uptimeFormatted}
-┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : 3.0.0
+┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Settings.version || '3.0.0'}
 ┃ ❍ 𝐏𝐫𝐞𝐟𝐢𝐱 : .
 ╰═════════════════⊷
 
@@ -166,7 +168,7 @@ ${readMoreKey}
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐭𝐚𝐠
 ┃ ❍ .𝐰𝐞𝐥𝐜𝐨𝐦𝐞
 ┃ ❍ .𝐠𝐨𝐨𝐝𝐛𝐲𝐞
-┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞𝐬𝐜
+┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞ᱥ𝐜
 ┃ ❍ .𝐬𝐞𝐭𝐠𝐧𝐚𝐦𝐞
 ┃ ❍ .𝐬𝐞𝐭𝐠𝐩𝐩
 ┃ ❍ .𝐠𝐞𝐭𝐠𝐫𝐨𝐮𝐩𝐩
@@ -185,7 +187,7 @@ ${readMoreKey}
 ┃ ❍ .𝐮𝐩𝐝𝐚𝐭𝐞
 ┃ ❍ .𝐦𝐨𝐝𝐞
 ┃ ❍ .𝐜𝐥𝐞𝐚𝐫𝐬𝐞𝐬𝐬𝐢𝐨𝐧
-┃ ❍ .𝐬𝐞𝐭𝐩𝐫𝐞𝐟𝐢𝐱
+┃ ❍ .𝐬𝐞𝐭𝐩𝐩𝐫𝐞𝐟𝐢𝐱
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐝𝐞𝐥𝐞𝐭𝐞
 ┃ ❍ .𝐜𝐥𝐞𝐚𝐫𝐭𝐦𝐩
 ┃ ❍ .𝐬𝐞𝐭𝐭𝐢𝐧𝐠𝐬
@@ -335,19 +337,37 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        await sock.sendMessage(chatId, {
-            image: { url: finalMediaUrl },
-            caption: helpMessage.trim(),
-            contextInfo: {
-                forwardingScore: 999,
-                isForwarded: true,
-                forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363321456789012@newsletter',
-                    newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
-                    serverMessageId: 100
+        if (isImageMedia) {
+            await sock.sendMessage(chatId, {
+                image: { url: finalMediaUrl },
+                caption: helpMessage.trim(),
+                contextInfo: {
+                    forwardingScore: 999,
+                    isForwarded: true,
+                    forwardedNewsletterMessageInfo: {
+                        newsletterJid: '120363321456789012@newsletter',
+                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                        serverMessageId: 100
+                    }
                 }
-            }
-        }, { quoted: vcardReply });
+            }, { quoted: vcardReply });
+        } else {
+            await sock.sendMessage(chatId, {
+                video: { url: finalMediaUrl },
+                caption: helpMessage.trim(),
+                mimetype: 'video/mp4',
+                ptv: false,
+                contextInfo: {
+                    forwardingScore: 999,
+                    isForwarded: true,
+                    forwardedNewsletterMessageInfo: {
+                        newsletterJid: '120363321456789012@newsletter',
+                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂',
+                        serverMessageId: 100
+                    }
+                }
+            }, { quoted: vcardReply });
+        }
 
         const ui = new A2UI();
         const actionText = ui.text('✨ *ZORO-MD Actions*', { variant: 'body' });
