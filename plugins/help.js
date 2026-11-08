@@ -42,6 +42,7 @@ async function helpCommand(sock, chatId, message) {
     try {
         const rennzModule = await import("@rennzsync/baileys");
         const proto = rennzModule.proto || rennzModule.default?.proto;
+        const prepareWAMessageMedia = rennzModule.prepareWAMessageMedia;
 
         if (!proto) {
             throw new Error("❌ Proto object could not be loaded from @rennzsync/baileys!");
@@ -342,7 +343,53 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝙳 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        // Direct ImageMessage creation bypassing prepareWAMessageMedia to prevent 'Invalid media type' error
+        const buttonsPayload = [
+            {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                    display_text: "",
+                    id: ".menu",
+                    icon: "document"
+                })
+            },
+            {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                    display_text: "",
+                    id: ".ping",
+                    icon: "thumb_up"
+                })
+            },
+            {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                    display_text: "",
+                    id: ".owner",
+                    icon: "tag"
+                })
+            }
+        ];
+
+        let headerObj;
+        try {
+            // ആദ്യം ഇമേജ് അപ്‌ലോഡ് ചെയ്യാൻ നോക്കും
+            const mediaMessage = await prepareWAMessageMedia({ image: { url: finalMediaUrl } }, { upload: sock.waUploadToServer });
+            headerObj = proto.Message.InteractiveMessage.Header.create({
+                title: "ZORO XMD MENU",
+                subtitle: "Aadhi Xd",
+                hasMediaAttachment: true,
+                imageMessage: mediaMessage.imageMessage
+            });
+        } catch (mediaErr) {
+            console.warn("⚠️ Image fetch/upload failed. Falling back to text-only header with A2UI buttons:", mediaErr.message);
+            // അഥവാ ഇമേജ് ഫെയിൽ ആയാൽ മീഡിയ ഒഴിവാക്കി ഹെഡർ മാത്രം സെറ്റ് ചെയ്യും (മെസ്സേജും ബട്ടണും മുടങ്ങില്ല)
+            headerObj = proto.Message.InteractiveMessage.Header.create({
+                title: "ZORO XMD MENU",
+                subtitle: "Aadhi Xd",
+                hasMediaAttachment: false
+            });
+        }
+
         const interactiveMessage = proto.Message.InteractiveMessage.create({
             body: proto.Message.InteractiveMessage.Body.create({
                 text: helpMessage.trim()
@@ -350,42 +397,9 @@ ${readMoreKey}
             footer: proto.Message.InteractiveMessage.Footer.create({
                 text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕"
             }),
-            header: proto.Message.InteractiveMessage.Header.create({
-                title: "ZORO XMD MENU",
-                subtitle: "Aadhi Xd",
-                hasMediaAttachment: true,
-                imageMessage: proto.Message.ImageMessage.create({
-                    url: finalMediaUrl,
-                    mimetype: 'image/jpeg'
-                })
-            }),
+            header: headerObj,
             nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
-                buttons: [
-                    {
-                        name: "quick_reply",
-                        buttonParamsJson: JSON.stringify({
-                            display_text: "",
-                            id: ".menu",
-                            icon: "document"
-                        })
-                    },
-                    {
-                        name: "quick_reply",
-                        buttonParamsJson: JSON.stringify({
-                            display_text: "",
-                            id: ".ping",
-                            icon: "thumb_up"
-                        })
-                    },
-                    {
-                        name: "quick_reply",
-                        buttonParamsJson: JSON.stringify({
-                            display_text: "",
-                            id: ".owner",
-                            icon: "tag"
-                        })
-                    }
-                ]
+                buttons: buttonsPayload
             })
         });
 
@@ -397,7 +411,6 @@ ${readMoreKey}
             }
         };
 
-        console.log("📤 DEBUG: Sending A2UI message payload via @rennzsync/baileys...");
         await sock.sendMessage(chatId, msgPayload, { quoted: vcardReply });
         console.log("✅ SUCCESS: Zoro MD Menu successfully sent!");
 
@@ -408,7 +421,8 @@ ${readMoreKey}
         console.error('📌 Full Stack Trace:', error.stack);
         console.error('🚨 ========================================');
         
-        await sock.sendMessage(chatId, { text: `⚠️ Menu Debug Error: ${error.message}` }, { quoted: message });
+        // തീർത്തും മൊത്തത്തിൽ എറർ വന്നാൽ സാധാരണ ടെക്സ്റ്റ് മെസ്സേജ് അയക്കും
+        await sock.sendMessage(chatId, { text: helpMessage }, { quoted: message });
     }
 }
 
