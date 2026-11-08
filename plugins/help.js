@@ -42,8 +42,8 @@ async function helpCommand(sock, chatId, message) {
     let helpMessage = '';
     try {
         const rennzModule = await import("@rennzsync/baileys");
-        const buildButtonsMessage = rennzModule.buildButtonsMessage || rennzModule.default?.buildButtonsMessage;
-        const sendClassicMessage = rennzModule.sendClassicMessage || rennzModule.default?.sendClassicMessage;
+        const A2UI = rennzModule.A2UI || rennzModule.default?.A2UI;
+        const sendA2UIWidget = rennzModule.sendA2UIWidget || rennzModule.default?.sendA2UIWidget;
 
         const start = Date.now();
         const ping = Math.round((Date.now() - start) / 2);
@@ -340,41 +340,57 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝙳 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        // 1. ആദ്യം ഇമേജ് ഹെഡറോട് കൂടിയ മെനുവായി അയക്കാൻ ശ്രമിക്കും
-        try {
-            console.log("📸 Sending Menu Image header first...");
-            await sock.sendMessage(chatId, { 
-                image: { url: finalMediaUrl }, 
-                caption: helpMessage.trim(),
-                footer: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕",
-                headerType: 4
-            }, { quoted: vcardReply });
-            console.log("✅ SUCCESS: Image Menu successfully sent!");
-        } catch (imgErr) {
-            console.warn("⚠️ Image sending failed, falling back to classic buttons message:", imgErr.message);
+        if (A2UI && sendA2UIWidget) {
+            const ui = new A2UI();
             
-            // 2. ഇമേജ് ഫെയിൽ ആയാൽ ക്ലാസിക് ബട്ടൺ മെസ്സേജ് അയക്കും
-            if (buildButtonsMessage && sendClassicMessage) {
-                const content = buildButtonsMessage({
-                    text: helpMessage.trim(),
-                    footer: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕",
-                    buttons: [
-                        { buttonId: '.menu', buttonText: 'Menu' },
-                        { buttonId: '.ping', buttonText: 'Ping' },
-                        { buttonId: '.owner', buttonText: 'Owner' }
-                    ]
-                });
-                await sock.sendMessage(chatId, { text: " " }, { quoted: vcardReply });
-                await sendClassicMessage(sock, chatId, content);
-                console.log("✅ SUCCESS: Classic Buttons Message fallback sent!");
-            } else {
-                await sock.sendMessage(chatId, { text: helpMessage }, { quoted: vcardReply });
-            }
+            const imgComp = ui.image(finalMediaUrl, { variant: 'cover' });
+            const textComp = ui.text(helpMessage.trim(), { variant: 'body' });
+            ui.root([imgComp, textComp]);
+
+            // വാട്സാപ്പ് നേറ്റീവ് ഫ്ലോ ബട്ടണുകളിൽ ഐക്കണുകൾ (Icons) സപ്പോർട്ട് ചെയ്യുന്ന രീതിയിലുള്ള പരാമീറ്റേഴ്സ്
+            const buttons = [
+                {
+                    name: 'quick_reply',
+                    params: JSON.stringify({
+                        display_text: '',
+                        id: '.menu',
+                        icon: 'document'
+                    })
+                },
+                {
+                    name: 'quick_reply',
+                    params: JSON.stringify({
+                        display_text: '',
+                        id: '.ping',
+                        icon: 'thumb_up'
+                    })
+                },
+                {
+                    name: 'quick_reply',
+                    params: JSON.stringify({
+                        display_text: '',
+                        id: '.owner',
+                        icon: 'tag'
+                    })
+                }
+            ];
+
+            console.log("🚀 Sending A2UI Widget Menu with Native Icons...");
+            await sock.sendMessage(chatId, { text: " " }, { quoted: vcardReply });
+            await sendA2UIWidget(sock, chatId, {
+                a2ui: ui,
+                bodyText: "ZORO XMD MENU",
+                footer: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕",
+                buttons: buttons
+            });
+            console.log("✅ SUCCESS: A2UI Widget Menu with icons sent!");
+        } else {
+            throw new Error("A2UI module could not be loaded.");
         }
 
     } catch (error) {
         console.error('🚨 ========================================');
-        console.error('❌ ZORO MD HELP MENU EXECUTION FAILED');
+        console.error('❌ ZORO MD A2UI MENU EXECUTION FAILED');
         console.error('📌 Error Message:', error.message);
         console.error('📌 Full Stack Trace:', error.stack);
         console.error('🚨 ========================================');
