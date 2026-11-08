@@ -40,10 +40,8 @@ function getEastAfricaDate() {
 
 async function helpCommand(sock, chatId, message) {
     try {
-        // പൂർണ്ണമായും @rennzsync/baileys മാത്രം ഉപയോഗിക്കുന്നു
         const rennzModule = await import("@rennzsync/baileys");
         const proto = rennzModule.proto || rennzModule.default?.proto;
-        const prepareWAMessageMedia = rennzModule.prepareWAMessageMedia;
 
         if (!proto) {
             throw new Error("❌ Proto object could not be loaded from @rennzsync/baileys!");
@@ -344,68 +342,52 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝙳 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        // 1. മീഡിയ പ്രിപ്പയർ ചെയ്യുമ്പോൾ എറർ ഉണ്ടോ എന്ന് നോക്കാൻ ട്രൈ-ക്യാച്ച്
-        let mediaMessage;
-        try {
-            mediaMessage = await prepareWAMessageMedia({ image: { url: finalMediaUrl } }, { upload: sock.waUploadToServer });
-        } catch (mediaErr) {
-            console.error("❌ A2UI MEDIA PREPARATION FAILED:", mediaErr);
-            throw new Error(`Media Prep Error: ${mediaErr.message}`);
-        }
-
-        // 2. ഇന്ററാക്ടീവ് മെസ്സേജ് ബട്ടൺ സ്ട്രക്ചർ ഡീബഗ് ലോഗ്
-        const buttonsPayload = [
-            {
-                name: "quick_reply",
-                buttonParamsJson: JSON.stringify({
-                    display_text: "",
-                    id: ".menu",
-                    icon: "document"
+        // Direct ImageMessage creation bypassing prepareWAMessageMedia to prevent 'Invalid media type' error
+        const interactiveMessage = proto.Message.InteractiveMessage.create({
+            body: proto.Message.InteractiveMessage.Body.create({
+                text: helpMessage.trim()
+            }),
+            footer: proto.Message.InteractiveMessage.Footer.create({
+                text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕"
+            }),
+            header: proto.Message.InteractiveMessage.Header.create({
+                title: "ZORO XMD MENU",
+                subtitle: "Aadhi Xd",
+                hasMediaAttachment: true,
+                imageMessage: proto.Message.ImageMessage.create({
+                    url: finalMediaUrl,
+                    mimetype: 'image/jpeg'
                 })
-            },
-            {
-                name: "quick_reply",
-                buttonParamsJson: JSON.stringify({
-                    display_text: "",
-                    id: ".ping",
-                    icon: "thumb_up"
-                })
-            },
-            {
-                name: "quick_reply",
-                buttonParamsJson: JSON.stringify({
-                    display_text: "",
-                    id: ".owner",
-                    icon: "tag"
-                })
-            }
-        ];
-
-        console.log("🛠️ DEBUG: Constructing A2UI NativeFlow buttons...", JSON.stringify(buttonsPayload, null, 2));
-
-        let interactiveMessage;
-        try {
-            interactiveMessage = proto.Message.InteractiveMessage.create({
-                body: proto.Message.InteractiveMessage.Body.create({
-                    text: helpMessage.trim()
-                }),
-                footer: proto.Message.InteractiveMessage.Footer.create({
-                    text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕"
-                }),
-                header: proto.Message.InteractiveMessage.Header.create({
-                    title: "ZORO XMD MENU",
-                    subtitle: "Aadhi Xd",
-                    hasMediaAttachment: true,
-                    imageMessage: mediaMessage.imageMessage
-                }),
-                nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
-                    buttons: buttonsPayload
-                })
-            });
-        } catch (protoErr) {
-            console.error("❌ A2UI PROTO CREATION FAILED:", protoErr);
-            throw new Error(`Proto Creation Error: ${protoErr.message}`);
-        }
+            }),
+            nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+                buttons: [
+                    {
+                        name: "quick_reply",
+                        buttonParamsJson: JSON.stringify({
+                            display_text: "",
+                            id: ".menu",
+                            icon: "document"
+                        })
+                    },
+                    {
+                        name: "quick_reply",
+                        buttonParamsJson: JSON.stringify({
+                            display_text: "",
+                            id: ".ping",
+                            icon: "thumb_up"
+                        })
+                    },
+                    {
+                        name: "quick_reply",
+                        buttonParamsJson: JSON.stringify({
+                            display_text: "",
+                            id: ".owner",
+                            icon: "tag"
+                        })
+                    }
+                ]
+            })
+        });
 
         const msgPayload = {
             viewOnceMessage: {
@@ -415,16 +397,14 @@ ${readMoreKey}
             }
         };
 
-        console.log("📤 DEBUG: Sending A2UI message payload to WhatsApp socket...");
+        console.log("📤 DEBUG: Sending A2UI message payload via @rennzsync/baileys...");
         await sock.sendMessage(chatId, msgPayload, { quoted: vcardReply });
-        console.log("✅ SUCCESS: Zoro MD Menu message successfully sent!");
+        console.log("✅ SUCCESS: Zoro MD Menu successfully sent!");
 
     } catch (error) {
-        // ഏതെങ്കിലും സ്റ്റെപ്പിൽ ബട്ടണോ മെസ്സേജോ തടസ്സപ്പെട്ടാൽ അതിന്റെ കൃത്യമായ കാരണം കൺസോളിൽ പ്രിന്റ് ചെയ്യും
         console.error('🚨 ========================================');
         console.error('❌ ZORO MD HELP MENU EXECUTION FAILED');
         console.error('📌 Error Message:', error.message);
-        console.error('📌 Error Code / Status:', error.output?.statusCode || 'N/A');
         console.error('📌 Full Stack Trace:', error.stack);
         console.error('🚨 ========================================');
         
