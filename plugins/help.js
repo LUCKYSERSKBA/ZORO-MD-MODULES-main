@@ -1,12 +1,13 @@
-const Settings = require("../settings");
-const MenuSettings = require("../database/model"); // ഡാറ്റാബേസ് മോഡൽ കോൾ ചെയ്യുന്നു
+const Const = require("../settings");
+const MenuSettings = require("../database/model");
+const { proto } = require("@rennzsync/baileys"); // `@rennzsync/baileys` പ്രോട്ടോക്കോൾ മാത്രം
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 
 const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
-const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4"; // ഡിഫോൾട്ട് ലിങ്ക്
+const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4";
 
 function formatTime(seconds) {
     const days = Math.floor(seconds / (24 * 60 * 60));
@@ -48,20 +49,15 @@ async function helpCommand(sock, chatId, message) {
         const currentDate = getEastAfricaDate();
         let userName = message.pushName || "Aadhi Xd";
 
-        // യൂസറുടെ ഐഡി എടുക്കുന്നു (ഓരോ യൂസർക്കും വെവ്വേറെ സെറ്റ് ചെയ്യാൻ)
         const userId = message.key.participant || message.key.remoteJid;
-
-        // ഡാറ്റാബേസിൽ ഈ യൂസർ കസ്റ്റം ലിങ്ക് സെറ്റ് ചെയ്തിട്ടുണ്ടോ എന്ന് നോക്കുന്നു
         const customSettings = await MenuSettings.findOne({ userId: userId });
 
-        // കസ്റ്റം ലിങ്ക് ഉണ്ടെങ്കിൽ അത് എടുക്കും, ഇല്ലെങ്കിൽ ഡിഫോൾട്ട് ലിങ്ക് ഉപയോഗിക്കും
         const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuVideoUrl;
         const isImageMedia = customSettings ? customSettings.mediaType === 'image' : false;
 
         let thumbnailBuffer = null;
         let base64Image = '';
         
-        // Safe Sharp processing inside try-catch to prevent OOM/crashes
         try {
             const response = await fetch(vcardImageUrl, { signal: AbortSignal.timeout(4000) });
             if (response.ok) {
@@ -111,7 +107,7 @@ async function helpCommand(sock, chatId, message) {
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
 ┃ ❍ 𝐔𝐩𝐭𝐢𝐦𝐞 : ${uptimeFormatted}
-┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Settings.version || '3.0.0'}
+┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Const.version || '3.0.0'}
 ┃ ❍ 𝐏𝐫𝐞𝐟𝐢𝐱 : .
 ╰═════════════════⊷
 
@@ -341,11 +337,50 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        // ഇമേജ് ആണോ അതോ വീഡിയോ ആണോ എന്ന് നോക്കി ഓട്ടോമാറ്റിക്കായി സെൻഡ് ചെയ്യുന്നു
+        const interactiveMessagePayload = {
+            viewOnceMessage: {
+                message: {
+                    interactiveMessage: proto.Message.InteractiveMessage.create({
+                        body: proto.Message.InteractiveMessage.Body.create({
+                            text: helpMessage.trim()
+                        }),
+                        footer: proto.Message.InteractiveMessage.Footer.create({
+                            text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂"
+                        }),
+                        nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+                            buttons: [
+                                {
+                                    name: "quick_reply",
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: "📋",
+                                        id: "action_note"
+                                    })
+                                },
+                                {
+                                    name: "quick_reply",
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: "👍",
+                                        id: "action_like"
+                                    })
+                                },
+                                {
+                                    name: "quick_reply",
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: "🏷️",
+                                        id: "action_tag"
+                                    })
+                                }
+                            ]
+                        })
+                    })
+                }
+            }
+        };
+
         if (isImageMedia) {
             await sock.sendMessage(chatId, {
                 image: { url: finalMediaUrl },
-                caption: helpMessage.trim(),
+                ...interactiveMessagePayload,
                 contextInfo: {
                     forwardingScore: 999,
                     isForwarded: true,
@@ -359,9 +394,9 @@ ${readMoreKey}
         } else {
             await sock.sendMessage(chatId, {
                 video: { url: finalMediaUrl },
-                caption: helpMessage.trim(),
                 mimetype: 'video/mp4',
                 ptv: false,
+                ...interactiveMessagePayload,
                 contextInfo: {
                     forwardingScore: 999,
                     isForwarded: true,
