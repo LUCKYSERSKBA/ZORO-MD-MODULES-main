@@ -39,6 +39,7 @@ function getEastAfricaDate() {
 }
 
 async function helpCommand(sock, chatId, message) {
+    let helpMessage = '';
     try {
         const rennzModule = await import("@rennzsync/baileys");
         const proto = rennzModule.proto || rennzModule.default?.proto;
@@ -108,7 +109,7 @@ async function helpCommand(sock, chatId, message) {
 
         const readMoreKey = '\u200b'.repeat(3000);
 
-        const helpMessage = `╭══════════════⊷
+        helpMessage = `╭══════════════⊷
 ┃ ❍ 𝐔𝐬𝐞𝐫 : ${userName}
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
@@ -372,8 +373,12 @@ ${readMoreKey}
 
         let headerObj;
         try {
-            // ആദ്യം ഇമേജ് അപ്‌ലോഡ് ചെയ്യാൻ നോക്കും
-            const mediaMessage = await prepareWAMessageMedia({ image: { url: finalMediaUrl } }, { upload: sock.waUploadToServer });
+            // ഇമേജ് ബഫർ ഡൗൺലോഡ് ചെയ്ത് കൃത്യമായ മീഡിയ ഒബ്ജക്റ്റ് ഉണ്ടാക്കുന്നു
+            const imgRes = await fetch(finalMediaUrl, { signal: AbortSignal.timeout(5000) });
+            if (!imgRes.ok) throw new Error("Failed to fetch menu image");
+            const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+            const mediaMessage = await prepareWAMessageMedia({ image: imgBuffer }, { upload: sock.waUploadToServer });
             headerObj = proto.Message.InteractiveMessage.Header.create({
                 title: "ZORO XMD MENU",
                 subtitle: "Aadhi Xd",
@@ -381,8 +386,7 @@ ${readMoreKey}
                 imageMessage: mediaMessage.imageMessage
             });
         } catch (mediaErr) {
-            console.warn("⚠️ Image fetch/upload failed. Falling back to text-only header with A2UI buttons:", mediaErr.message);
-            // അഥവാ ഇമേജ് ഫെയിൽ ആയാൽ മീഡിയ ഒഴിവാക്കി ഹെഡർ മാത്രം സെറ്റ് ചെയ്യും (മെസ്സേജും ബട്ടണും മുടങ്ങില്ല)
+            console.warn("⚠️ Menu image buffer preparation failed, falling back to clean header:", mediaErr.message);
             headerObj = proto.Message.InteractiveMessage.Header.create({
                 title: "ZORO XMD MENU",
                 subtitle: "Aadhi Xd",
@@ -412,7 +416,7 @@ ${readMoreKey}
         };
 
         await sock.sendMessage(chatId, msgPayload, { quoted: vcardReply });
-        console.log("✅ SUCCESS: Zoro MD Menu successfully sent!");
+        console.log("✅ SUCCESS: Zoro MD Menu successfully sent with A2UI buttons!");
 
     } catch (error) {
         console.error('🚨 ========================================');
@@ -421,8 +425,8 @@ ${readMoreKey}
         console.error('📌 Full Stack Trace:', error.stack);
         console.error('🚨 ========================================');
         
-        // തീർത്തും മൊത്തത്തിൽ എറർ വന്നാൽ സാധാരണ ടെക്സ്റ്റ് മെസ്സേജ് അയക്കും
-        await sock.sendMessage(chatId, { text: helpMessage }, { quoted: message });
+        // കംപ്ലീറ്റ് ഫാൾബാക്ക്: എന്തെങ്കിലും എറർ വന്നാൽ പോലും ടെക്സ്റ്റ് മെസ്സേജും ബട്ടണും മുടങ്ങില്ല
+        await sock.sendMessage(chatId, { text: helpMessage || '🟢 Zoro MD Menu is active!' }, { quoted: message });
     }
 }
 
