@@ -1,10 +1,10 @@
 import { A2UI, sendA2UIWidget } from '../lib/a2ui.js';
-const Settings = require("../settings");
-const MenuSettings = require("../database/model");
-const os = require('os');
-const fs = require('fs');
-const path = require('path');
-const sharp = require('sharp');
+import Settings from '../settings.js'; // അല്ലെങ്കിൽ settings-ന്റെ രീതി അനുസരിച്ച്
+import MenuSettings from '../database/model.js';
+import os from 'os';
+import fs from 'fs';
+import path from 'path';
+import sharp from 'sharp';
 
 const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
 const defaultMenuImageUrl = "https://files.catbox.moe/49bust.jpg";
@@ -39,7 +39,7 @@ function getEastAfricaDate() {
     return `${day}/${month}/${year}`;
 }
 
-async function helpCommand(sock, chatId, message) {
+export default async function helpCommand(sock, chatId, message) {
     try {
         const start = Date.now();
         const ping = Math.round((Date.now() - start) / 2);
@@ -105,7 +105,7 @@ async function helpCommand(sock, chatId, message) {
 ┃ ❍ 𝐏𝐢𝐧𝐠 : ${ping}ms
 ┃ ❍ 𝐃𝐚𝐭𝐞 : ${currentDate}
 ┃ ❍ 𝐔𝐩𝐭𝐢𝐦𝐞 : ${uptimeFormatted}
-┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : ${Settings.version || '3.0.0'}
+┃ ❍ 𝐕𝐞𝐫𝐬𝐢𝐨𝐧 : 3.0.0
 ┃ ❍ 𝐏𝐫𝐞𝐟𝐢𝐱 : .
 ╰═════════════════⊷
 
@@ -335,7 +335,6 @@ ${readMoreKey}
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
-        // 1. ആദ്യം മെനു ഇമേജും ഒറിജിനൽ ക്യാപ്ഷനും അയക്കുന്നു
         await sock.sendMessage(chatId, {
             image: { url: finalMediaUrl },
             caption: helpMessage.trim(),
@@ -350,7 +349,6 @@ ${readMoreKey}
             }
         }, { quoted: vcardReply });
 
-        // 2. വാട്സാപ്പ് നേറ്റീവ് പച്ച ഐക്കണുകളോട് കൂടിയ 3 ബട്ടണുകൾ സെറ്റ് ചെയ്യുന്നു
         const ui = new A2UI();
         const actionText = ui.text('✨ *ZORO-MD Actions*', { variant: 'body' });
         ui.root([actionText]);
@@ -393,5 +391,3 @@ ${readMoreKey}
         await sock.sendMessage(chatId, { text: '🟢 Zoro MD Menu is active!' }, { quoted: message });
     }
 }
-
-module.exports = helpCommand;
