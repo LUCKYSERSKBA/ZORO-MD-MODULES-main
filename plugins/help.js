@@ -347,7 +347,6 @@ ${readMoreKey}
             const textComp = ui.text(helpMessage.trim(), { variant: 'body' });
             ui.root([imgComp, textComp]);
 
-            // വാട്സാപ്പ് നേറ്റീവ് ഫ്ലോ ബട്ടണുകളിൽ ഐക്കണുകൾ (Icons) സപ്പോർട്ട് ചെയ്യുന്ന രീതിയിലുള്ള പരാമീറ്റേഴ്സ്
             const buttons = [
                 {
                     name: 'quick_reply',
@@ -375,7 +374,7 @@ ${readMoreKey}
                 }
             ];
 
-            console.log("🚀 Sending A2UI Widget Menu with Native Icons...");
+            console.log("🚀 Sending A2UI Widget Menu...");
             await sock.sendMessage(chatId, { text: " " }, { quoted: vcardReply });
             await sendA2UIWidget(sock, chatId, {
                 a2ui: ui,
@@ -383,7 +382,7 @@ ${readMoreKey}
                 footer: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕",
                 buttons: buttons
             });
-            console.log("✅ SUCCESS: A2UI Widget Menu with icons sent!");
+            console.log("✅ SUCCESS: A2UI Widget sent!");
         } else {
             throw new Error("A2UI module could not be loaded.");
         }
