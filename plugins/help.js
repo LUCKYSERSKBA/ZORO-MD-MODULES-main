@@ -6,7 +6,7 @@ const path = require('path');
 const sharp = require('sharp');
 
 const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
-const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4";
+const defaultMenuImageUrl = "https://files.catbox.moe/49bust.jpg";
 
 function formatTime(seconds) {
     const days = Math.floor(seconds / (24 * 60 * 60));
@@ -40,7 +40,6 @@ function getEastAfricaDate() {
 
 async function helpCommand(sock, chatId, message) {
     try {
-        // ഡൈനാമിക് ആയി ESM പാക്കേജ് ലോഡ് ചെയ്യുന്നു (ERR_REQUIRE_ASYNC_MODULE ഫുൾ ഒഴിവാക്കാൻ)
         let proto;
         try {
             const rennzModule = await import("@rennzsync/baileys");
@@ -60,8 +59,7 @@ async function helpCommand(sock, chatId, message) {
         const userId = message.key.participant || message.key.remoteJid;
         const customSettings = await MenuSettings.findOne({ userId: userId });
 
-        const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuVideoUrl;
-        const isImageMedia = customSettings ? customSettings.mediaType === 'image' : false;
+        const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuImageUrl;
 
         let thumbnailBuffer = null;
         let base64Image = '';
@@ -342,7 +340,7 @@ ${readMoreKey}
 ┃ ❍ .𝐬𝐜𝐫𝐢𝐩𝐭
 ┃ ❍ .𝐫𝐞𝐩𝐨
 ╰══════════════⊷
-> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
+> 𝒁𝑶𝑹𝑶 𝐗𝐌𝙳 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
         const interactiveMessagePayload = {
@@ -355,27 +353,33 @@ ${readMoreKey}
                         footer: proto.Message.InteractiveMessage.Footer.create({
                             text: "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 ᴏ𝚏𝚏𝚒𝚌𝚒𝚊𝚕"
                         }),
+                        header: proto.Message.InteractiveMessage.Header.create({
+                            hasMediaAttachment: true
+                        }),
                         nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
                             buttons: [
                                 {
                                     name: "quick_reply",
                                     buttonParamsJson: JSON.stringify({
-                                        display_text: "📋",
-                                        id: "action_note"
+                                        display_text: "",
+                                        id: ".menu",
+                                        icon: "document"
                                     })
                                 },
                                 {
                                     name: "quick_reply",
                                     buttonParamsJson: JSON.stringify({
-                                        display_text: "👍",
-                                        id: "action_like"
+                                        display_text: "",
+                                        id: ".ping",
+                                        icon: "thumb_up"
                                     })
                                 },
                                 {
                                     name: "quick_reply",
                                     buttonParamsJson: JSON.stringify({
-                                        display_text: "🏷️",
-                                        id: "action_tag"
+                                        display_text: "",
+                                        id: ".owner",
+                                        icon: "tag"
                                     })
                                 }
                             ]
@@ -385,37 +389,19 @@ ${readMoreKey}
             }
         };
 
-        if (isImageMedia) {
-            await sock.sendMessage(chatId, {
-                image: { url: finalMediaUrl },
-                ...interactiveMessagePayload,
-                contextInfo: {
-                    forwardingScore: 999,
-                    isForwarded: true,
-                    forwardedNewsletterMessageInfo: {
-                        newsletterJid: '120363321456789012@newsletter',
-                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝐎𝒇𝒇𝚒𝚌𝚒𝚊',
-                        serverMessageId: 100
-                    }
+        await sock.sendMessage(chatId, {
+            image: { url: finalMediaUrl },
+            ...interactiveMessagePayload,
+            contextInfo: {
+                forwardingScore: 999,
+                isForwarded: true,
+                forwardedNewsletterMessageInfo: {
+                    newsletterJid: '120363321456789012@newsletter',
+                    newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝐎𝒇𝒇𝚒𝚌𝚒𝚊',
+                    serverMessageId: 100
                 }
-            }, { quoted: vcardReply });
-        } else {
-            await sock.sendMessage(chatId, {
-                video: { url: finalMediaUrl },
-                mimetype: 'video/mp4',
-                ptv: false,
-                ...interactiveMessagePayload,
-                contextInfo: {
-                    forwardingScore: 999,
-                    isForwarded: true,
-                    forwardedNewsletterMessageInfo: {
-                        newsletterJid: '120363321456789012@newsletter',
-                        newsletterName: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝐎𝒇𝒇𝚒𝚌𝚒𝚊',
-                        serverMessageId: 100
-                    }
-                }
-            }, { quoted: vcardReply });
-        }
+            }
+        }, { quoted: vcardReply });
 
     } catch (error) {
         console.error('Error in help command:', error);
