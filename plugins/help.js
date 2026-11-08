@@ -6,7 +6,6 @@ const path = require('path');
 const sharp = require('sharp');
 const { randomBytes, randomUUID } = require('crypto');
 
-const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
 const defaultMenuImageUrl = "https://files.catbox.moe/49bust.jpg";
 
 function formatTime(seconds) {
@@ -41,7 +40,6 @@ function getEastAfricaDate() {
 
 async function helpCommand(sock, chatId, message) {
     let helpMessage = '';
-    let vcardReply = null;
     let finalMediaUrl = defaultMenuImageUrl;
 
     try {
@@ -57,51 +55,6 @@ async function helpCommand(sock, chatId, message) {
         const customSettings = await MenuSettings.findOne({ userId: userId });
 
         finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuImageUrl;
-
-        let thumbnailBuffer = null;
-        let base64Image = '';
-        
-        try {
-            const response = await fetch(vcardImageUrl, { signal: AbortSignal.timeout(4000) });
-            if (response.ok) {
-                const arrayBuffer = await response.arrayBuffer();
-                const buffer = Buffer.from(arrayBuffer);
-
-                thumbnailBuffer = await sharp(buffer)
-                    .resize(200, 200, { fit: 'cover', position: 'center' })
-                    .jpeg({ quality: 80, progressive: true })
-                    .toBuffer();
-                
-                base64Image = thumbnailBuffer.toString('base64');
-            }
-        } catch (err) {
-            console.log('⚠️ Menu vcard image processing bypassed safely:', err.message);
-        }
-
-        const vcardName = "Aadhi Xd";
-        const vcard = [
-            'BEGIN:VCARD',
-            'VERSION:3.0',
-            `N:;${vcardName};;;`,
-            `FN:${vcardName}`,
-            base64Image ? `PHOTO;ENCODING=b;TYPE=JPEG:${base64Image}` : '',
-            'END:VCARD'
-        ].filter(Boolean).join('\n');
-
-        vcardReply = {
-            key: {
-                fromMe: false,
-                participant: '0@s.whatsapp.net',
-                remoteJid: 'status@broadcast'
-            },
-            message: {
-                contactMessage: {
-                    displayName: vcardName,
-                    vcard: vcard,
-                    jpegThumbnail: thumbnailBuffer || undefined
-                }
-            }
-        };
 
         const readMoreKey = '\u200b'.repeat(3000);
 
@@ -146,7 +99,7 @@ async function helpCommand(sock, chatId, message) {
 ┃ ❍ .𝐚𝐠𝐞
 ┃ ❍ .𝐟𝐥𝐢𝐩𝐭𝐞𝐱𝐭
 ┃ ❍ .𝐬𝐞𝐭𝐛𝐨𝐭𝐟𝐨𝐧𝐭
-╰═════════════════⊷
+╰══════════════⊷
 ${readMoreKey}
 *\`〄⟩ 𝐀𝐃𝐌𝐈𝐍 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒 |-𓋜*
 ╭══════════════⊷
@@ -179,7 +132,7 @@ ${readMoreKey}
 ┃ ❍ .𝐜𝐥𝐨𝐬𝐞
 ┃ ❍ .𝐨𝐩𝐞𝐧
 ┃ ❍ .𝐚𝐩𝐩𝐫𝐨𝐯𝐞𝐚𝐥𝚕
-┃ ❍ .𝐝𝐢𝐬𝐚𝐩𝐩𝐫𝐨𝐯𝐞𝐚𝐥𝚕
+┃ ❍ .𝐝isapproval𝚕
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐬𝐭𝐢𝐜𝐤𝐞𝐫
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐛𝐨𝐭
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐟𝐨𝐫𝐰𝐚𝐫𝐝
@@ -388,12 +341,10 @@ ${readMoreKey}
             nativeFlowMessage
         };
 
-        await sock.sendMessage(chatId, { text: " " }, { quoted: vcardReply });
-        
         const msg = generateWAMessageFromContent(chatId, {
             messageContextInfo: { messageSecret: randomBytes(32) },
             interactiveMessage
-        }, { quoted: vcardReply || message, userJid: sock.user?.id || sock.authState?.creds?.me?.id });
+        }, { quoted: message, userJid: sock.user?.id || sock.authState?.creds?.me?.id });
 
         await sock.relayMessage(chatId, msg.message, {
             messageId: msg.key.id,
