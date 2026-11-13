@@ -1,13 +1,12 @@
-const { A2UI, sendA2UIWidget } = require('../lib/a2ui.js');
 const Settings = require("../settings");
-const MenuSettings = require("../database/model");
+const MenuSettings = require("../database/model"); // ഡാറ്റാബേസ് മോഡൽ കോൾ ചെയ്യുന്നു
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 
 const vcardImageUrl = "https://files.catbox.moe/5tnppp.jpg";
-const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4";
+const defaultMenuVideoUrl = "https://files.catbox.moe/4i9a80.mp4"; // ഡിഫോൾട്ട് ലിങ്ക്
 
 function formatTime(seconds) {
     const days = Math.floor(seconds / (24 * 60 * 60));
@@ -49,15 +48,20 @@ async function helpCommand(sock, chatId, message) {
         const currentDate = getEastAfricaDate();
         let userName = message.pushName || "Aadhi Xd";
 
+        // യൂസറുടെ ഐഡി എടുക്കുന്നു (ഓരോ യൂസർക്കും വെവ്വേറെ സെറ്റ് ചെയ്യാൻ)
         const userId = message.key.participant || message.key.remoteJid;
+
+        // ഡാറ്റാബേസിൽ ഈ യൂസർ കസ്റ്റം ലിങ്ക് സെറ്റ് ചെയ്തിട്ടുണ്ടോ എന്ന് നോക്കുന്നു
         const customSettings = await MenuSettings.findOne({ userId: userId });
 
+        // കസ്റ്റം ലിങ്ക് ഉണ്ടെങ്കിൽ അത് എടുക്കും, ഇല്ലെങ്കിൽ ഡിഫോൾട്ട് ലിങ്ക് ഉപയോഗിക്കും
         const finalMediaUrl = customSettings ? customSettings.mediaUrl : defaultMenuVideoUrl;
         const isImageMedia = customSettings ? customSettings.mediaType === 'image' : false;
 
         let thumbnailBuffer = null;
         let base64Image = '';
         
+        // Safe Sharp processing inside try-catch to prevent OOM/crashes
         try {
             const response = await fetch(vcardImageUrl, { signal: AbortSignal.timeout(4000) });
             if (response.ok) {
@@ -168,7 +172,7 @@ ${readMoreKey}
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐭𝐚𝐠
 ┃ ❍ .𝐰𝐞𝐥𝐜𝐨𝐦𝐞
 ┃ ❍ .𝐠𝐨𝐨𝐝𝐛𝐲𝐞
-┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞ᱥ𝐜
+┃ ❍ .𝐬𝐞𝐭𝐠𝐝𝐞𝐬𝐜
 ┃ ❍ .𝐬𝐞𝐭𝐠𝐧𝐚𝐦𝐞
 ┃ ❍ .𝐬𝐞𝐭𝐠𝐩𝐩
 ┃ ❍ .𝐠𝐞𝐭𝐠𝐫𝐨𝐮𝐩𝐩
@@ -187,7 +191,7 @@ ${readMoreKey}
 ┃ ❍ .𝐮𝐩𝐝𝐚𝐭𝐞
 ┃ ❍ .𝐦𝐨𝐝𝐞
 ┃ ❍ .𝐜𝐥𝐞𝐚𝐫𝐬𝐞𝐬𝐬𝐢𝐨𝐧
-┃ ❍ .𝐬𝐞𝐭𝐩𝐩𝐫𝐞𝐟𝐢𝐱
+┃ ❍ .𝐬𝐞𝐭𝐩𝐫𝐞𝐟𝐢𝐱
 ┃ ❍ .𝐚𝐧𝐭𝐢𝐝𝐞𝐥𝐞𝐭𝐞
 ┃ ❍ .𝐜𝐥𝐞𝐚𝐫𝐭𝐦𝐩
 ┃ ❍ .𝐬𝐞𝐭𝐭𝐢𝐧𝐠𝐬
@@ -333,10 +337,11 @@ ${readMoreKey}
 ┃ ❍ .𝐬𝐜
 ┃ ❍ .𝐬𝐜𝐫𝐢𝐩𝐭
 ┃ ❍ .𝐫𝐞𝐩𝐨
-╰═════════════════⊷
+╰══════════════⊷
 > 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1
 > _Crafted by Aadhi.xd乡_`;
 
+        // ഇമേജ് ആണോ അതോ വീഡിയോ ആണോ എന്ന് നോക്കി ഓട്ടോമാറ്റിക്കായി സെൻഡ് ചെയ്യുന്നു
         if (isImageMedia) {
             await sock.sendMessage(chatId, {
                 image: { url: finalMediaUrl },
@@ -368,43 +373,6 @@ ${readMoreKey}
                 }
             }, { quoted: vcardReply });
         }
-
-        const ui = new A2UI();
-        const actionText = ui.text('✨ *ZORO-MD Actions*', { variant: 'body' });
-        ui.root([actionText]);
-
-        const a2uiButtons = [
-            {
-                name: 'cta_url',
-                params: {
-                    display_text: '🌐 Dashboard',
-                    url: 'https://github.com/Aadhixd777',
-                    merchant_url: 'https://github.com/Aadhixd777'
-                }
-            },
-            {
-                name: 'cta_url',
-                params: {
-                    display_text: '📦 Open Repo',
-                    url: 'https://github.com/Aadhixd777',
-                    merchant_url: 'https://github.com/Aadhixd777'
-                }
-            },
-            {
-                name: 'quick_reply',
-                params: {
-                    display_text: '⚡ Ping Status',
-                    id: 'ping'
-                }
-            }
-        ];
-
-        await sendA2UIWidget(sock, chatId, {
-            a2ui: ui,
-            bodyText: 'Select an option:',
-            footer: '𝒁𝑶𝑹𝑶 𝑿𝑴𝑫',
-            buttons: a2uiButtons
-        });
 
     } catch (error) {
         console.error('Error in help command:', error);
