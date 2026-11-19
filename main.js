@@ -196,6 +196,13 @@ const obfuscateCommand = require('./plugins/obfuscate');
 const textstickerCommand = require('./plugins/textsticker');
 const picCommand = require('./plugins/pic');
 
+// ✨ 5 New Downloader & Search Plugins (By Aadhi / Zoro)
+const appleMusicCommand = require('./plugins/applemusic');
+const pinByAadhiCommand = require('./plugins/pinbyaadhi');
+const ytvByAadhiCommand = require('./plugins/ytvbyaadhi');
+const ytsShortCommand = require('./plugins/ytsshort');
+const pinHuntCommand = require('./plugins/pinhunt');
+
 const stiCommand = require('./plugins/sti');
 const m4aCommand = require('./plugins/m4a');
 const shazamCommand = require('./plugins/shazam');
@@ -485,6 +492,26 @@ To change your bot prefix, use the command followed by your desired symbol, sing
         }
 
         switch (parsedCmd.commandName) {
+            case 'applemusic':
+                await appleMusicCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
+            case 'pinbyaadhi':
+                await pinByAadhiCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
+            case 'ytvbyaadhi':
+                await ytvByAadhiCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
+            case 'ytsshort':
+                await ytsShortCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
+            case 'pinhunt':
+                await pinHuntCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
             case 'sti':
                 await stiCommand(sock, chatId, message);
                 commandExecuted = true;
