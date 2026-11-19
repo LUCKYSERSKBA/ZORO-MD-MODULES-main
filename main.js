@@ -853,6 +853,8 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'sad':
             case 'happy':
             case 'angry':
+            case 'funny':
+            case 'heart':
                 await animEditCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
@@ -1065,9 +1067,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
             case 'autoread':
                 await autoreadCommand(sock, chatId, message);
-                break;
-            case 'heart':
-                await handleHeart(sock, chatId, message);
                 break;
             case 'horny':
             case 'circle':
