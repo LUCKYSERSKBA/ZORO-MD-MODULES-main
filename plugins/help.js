@@ -1,4 +1,4 @@
-Const Settings = require("../settings");
+const Settings = require("../settings");
 const MenuSettings = require("../database/model"); // ഡാറ്റാബേസ് മോഡൽ കോൾ ചെയ്യുന്നു
 const os = require('os');
 const fs = require('fs');
