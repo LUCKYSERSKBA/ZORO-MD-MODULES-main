@@ -1,183 +1,176 @@
-const axios = require('axios');
+const axios = require("axios");
 
-const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24';
-const NEWSLETTER_JID = '0029Vb7pgsF4tRrkS5CECe24@newsletter';
-const CREDIT_TEXT = '𝐁𝐲 𝐀𝐚𝐝𝐡𝐢𝐱𝐝 ㌅';
-const COMPLETE_TEXT = 'Download Completed By Zoro';
+const DEMO_LINK = "https://pin.it/2Uu82fPs2";
+const CHANNEL_LINK = "https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24";
+const CREDIT = "𝐁𝐲 𝐀𝐚𝐝𝐡𝐢𝐱𝐝 ㌅";
+const FOOTER = "✅ *Download Completed By Zoro*";
 
-const processedMessages = new Set();
-
-function replaceChannelLinks(text = '') {
-    return String(text)
-        .replace(/https?:\/\/(?:www\.)?(?:whatsapp\.com\/channel\/|chat\.whatsapp\.com\/|t\.me\/|telegram\.me\/)[^\s]+/gi, CHANNEL_LINK)
-        .replace(/(?:www\.)?whatsapp\.com\/channel\/[^\s]+/gi, CHANNEL_LINK)
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+function isValidPinUrl(text = "") {
+  return /^https?:\/\/(www\.)?(pin\.it\/[A-Za-z0-9_-]+|([a-z]{2}\.)?pinterest\.com\/pin\/[A-Za-z0-9_-]+)/i.test(
+    text.trim()
+  );
 }
 
-function getRawText(message) {
-    return (
-        message?.message?.conversation?.trim() ||
-        message?.message?.extendedTextMessage?.text?.trim() ||
-        message?.message?.imageMessage?.caption?.trim() ||
-        message?.message?.videoMessage?.caption?.trim() ||
-        ''
+async function fetchBuffer(url) {
+  const res = await axios.get(url, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Linux; Android 13; Infinix X6836) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+      Referer: "https://www.pinterest.com/",
+      Accept: "*/*",
+    },
+  });
+
+  const buffer = Buffer.from(res.data);
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Empty media buffer received");
+  }
+
+  return {
+    buffer,
+    contentType: (res.headers["content-type"] || "").toLowerCase(),
+  };
+}
+
+function parsePinResponse(data) {
+  const payload = data?.data && typeof data.data === "object" ? data.data : data;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid API response");
+  }
+
+  const rawType = String(payload.type || "").toLowerCase();
+  const videoCandidate =
+    payload.mp4 ||
+    (Array.isArray(payload.videos) && payload.videos[0]?.url) ||
+    (rawType === "video" ? payload.downloadUrl || payload.url || payload.video : null);
+
+  const imageCandidate =
+    rawType === "image"
+      ? payload.downloadUrl || payload.image || payload.url || payload.thumbnail
+      : payload.image || payload.thumbnail;
+
+  const title = (payload.title || "Pinterest Media").trim();
+
+  if (rawType === "video" || videoCandidate) {
+    const mediaUrl = videoCandidate || payload.downloadUrl;
+    if (!mediaUrl) throw new Error("Missing Pinterest video URL");
+    return { kind: "video", mediaUrl, title };
+  }
+
+  if (rawType === "image" || imageCandidate) {
+    const mediaUrl = imageCandidate || payload.downloadUrl;
+    if (!mediaUrl) throw new Error("Missing Pinterest image URL");
+    return { kind: "image", mediaUrl, title };
+  }
+
+  throw new Error("Unsupported Pinterest media type");
+}
+
+async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
+  const input = text.trim();
+
+  if (!input) {
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text:
+          `📌 *Pinterest Downloader*\n\n` +
+          `Usage: *.pinbyaadhi <pinterest_url>*\n` +
+          `Demo Link: ${DEMO_LINK}\n\n` +
+          `${CREDIT}\n${CHANNEL_LINK}`,
+      },
+      { quoted: m }
     );
-}
+    return;
+  }
 
-function getArgText(rawText = '') {
-    const parts = String(rawText).trim().split(/\s+/);
-    return parts.slice(1).join(' ').trim();
-}
+  if (!isValidPinUrl(input)) {
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text:
+          `❌ Invalid Pinterest URL.\n` +
+          `Demo Link: ${DEMO_LINK}\n\n` +
+          `${CREDIT}\n${CHANNEL_LINK}`,
+      },
+      { quoted: m }
+    );
+    return;
+  }
 
-function extractPinterestUrl(input = '') {
-    const match = String(input).match(/https?:\/\/(?:[\w-]+\.)?(?:pinterest\.com|pin\.it)\/[^\s]+/i);
-    return match ? match[0] : '';
-}
+  try {
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "💗", key: m.key } });
 
-async function pinByAadhiCommand(sock, chatId, message) {
-    try {
-        if (message?.key?.id) {
-            if (processedMessages.has(message.key.id)) return;
-            processedMessages.add(message.key.id);
-            setTimeout(() => processedMessages.delete(message.key.id), 5 * 60 * 1000);
-        }
+    const { data } = await axios.get(apiEndpoint, {
+      params: { url: input },
+      timeout: 30000,
+    });
 
-        const rawText = getRawText(message);
-        const argText = getArgText(rawText);
-        const pinUrl = extractPinterestUrl(argText || rawText);
+    const parsed = parsePinResponse(data);
+    const { buffer, contentType } = await fetchBuffer(parsed.mediaUrl);
 
-        if (!pinUrl) {
-            return await sock.sendMessage(
-                chatId,
-                {
-                    text: replaceChannelLinks(
-                        `❌ Please provide a valid Pinterest link.\nExample: .pinbyaadhi https://pin.it/xxxxxxx\n\n${CREDIT_TEXT}\n${CHANNEL_LINK}`
-                    )
-                },
-                { quoted: message }
-            );
-        }
+    const caption =
+      `╭───「 💗 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 」───\n` +
+      `│ ✨ *${parsed.title}*\n` +
+      `│ ${CREDIT}\n` +
+      `╰────────────────────\n` +
+      `${CHANNEL_LINK}`;
 
-        try {
-            await sock.sendMessage(chatId, { react: { text: '💗', key: message.key } });
-        } catch (e) {}
+    if (parsed.kind === "video") {
+      await sock.sendMessage(
+        m.key.remoteJid,
+        {
+          video: buffer,
+          mimetype: contentType.includes("video") ? contentType : "video/mp4",
+          caption,
+        },
+        { quoted: m }
+      );
+    } else {
+      const mime = contentType.includes("png")
+        ? "image/png"
+        : contentType.includes("webp")
+        ? "image/webp"
+        : "image/jpeg";
 
-        const apiUrl = `https://xenosirapis.zone.id/api/pindl?url=${encodeURIComponent(pinUrl)}`;
-        const { data } = await axios.get(apiUrl, { timeout: 30000 });
-
-        const payload = data?.result || data?.data || data || {};
-        const title = replaceChannelLinks(payload.title || 'Pinterest Media');
-        const videoUrl = payload.video || payload.downloadUrl;
-        const imageUrl = payload.image || payload.thumbnail;
-
-        const caption = replaceChannelLinks(
-            `╭───「 💗 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 」───\n│ 🖼️ *${title}*\n│ ${CREDIT_TEXT}\n╰────────────────────\n${CHANNEL_LINK}`
-        );
-
-        let sentMedia = false;
-
-        if (videoUrl && /\.mp4/i.test(videoUrl)) {
-            const vidRes = await axios.get(videoUrl, {
-                responseType: 'arraybuffer',
-                timeout: 120000
-            });
-            const vidBuffer = Buffer.from(vidRes.data);
-
-            await sock.sendMessage(
-                chatId,
-                {
-                    video: vidBuffer,
-                    mimetype: 'video/mp4',
-                    caption,
-                    contextInfo: {
-                        forwardingScore: 1,
-                        isForwarded: true,
-                        forwardedNewsletterMessageInfo: {
-                            newsletterJid: NEWSLETTER_JID,
-                            newsletterName: '𝚉𝙾𝚁𝙾 𝙼𝙳 𝙿𝙸𝙽𝚃𝙴𝚁𝙴𝚂𝚃'
-                        }
-                    }
-                },
-                { quoted: message }
-            );
-            sentMedia = true;
-        } else if (imageUrl) {
-            const imgRes = await axios.get(imageUrl, {
-                responseType: 'arraybuffer',
-                timeout: 60000
-            });
-            const imgBuffer = Buffer.from(imgRes.data);
-            const isPng = /\.png/i.test(imageUrl);
-
-            await sock.sendMessage(
-                chatId,
-                {
-                    image: imgBuffer,
-                    mimetype: isPng ? 'image/png' : 'image/jpeg',
-                    caption,
-                    contextInfo: {
-                        forwardingScore: 1,
-                        isForwarded: true,
-                        forwardedNewsletterMessageInfo: {
-                            newsletterJid: NEWSLETTER_JID,
-                            newsletterName: '𝚉𝙾𝚁𝙾 𝙼𝙳 𝙿𝙸𝙽𝚃𝙴𝚁𝙴𝚂𝚃'
-                        }
-                    }
-                },
-                { quoted: message }
-            );
-            sentMedia = true;
-        } else {
-            try {
-                await sock.sendMessage(chatId, { react: { text: '📉', key: message.key } });
-            } catch (e) {}
-
-            return await sock.sendMessage(
-                chatId,
-                {
-                    text: replaceChannelLinks(`❌ Media not found.\n\n${CREDIT_TEXT}\n${CHANNEL_LINK}`)
-                },
-                { quoted: message }
-            );
-        }
-
-        if (sentMedia) {
-            await sock.sendMessage(
-                chatId,
-                {
-                    text: replaceChannelLinks(`✅ *${COMPLETE_TEXT}* • ${CREDIT_TEXT}`),
-                    contextInfo: {
-                        forwardingScore: 1,
-                        isForwarded: true,
-                        forwardedNewsletterMessageInfo: {
-                            newsletterJid: NEWSLETTER_JID,
-                            newsletterName: '𝚉𝙾𝚁𝙾 𝙼𝙳 𝙿𝙸𝙽𝚃𝙴𝚁𝙴𝚂𝚃'
-                        }
-                    }
-                }
-            );
-        }
-
-        try {
-            await sock.sendMessage(chatId, { react: { text: '✅', key: message.key } });
-        } catch (e) {}
-    } catch (error) {
-        try {
-            await sock.sendMessage(chatId, { react: { text: '📉', key: message.key } });
-        } catch (e) {}
-
-        await sock.sendMessage(
-            chatId,
-            {
-                text: replaceChannelLinks(`❌ Failed to download Pinterest media.\n\n${CREDIT_TEXT}\n${CHANNEL_LINK}`)
-            },
-            { quoted: message }
-        );
+      await sock.sendMessage(
+        m.key.remoteJid,
+        {
+          image: buffer,
+          mimetype: mime,
+          caption,
+        },
+        { quoted: m }
+      );
     }
+
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text: `${FOOTER} • ${CREDIT}`,
+      },
+      { quoted: m }
+    );
+
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "✅", key: m.key } });
+  } catch (err) {
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text:
+          `❌ Failed to download Pinterest media.\n` +
+          `Demo Link: ${DEMO_LINK}\n\n` +
+          `${CREDIT}\n${CHANNEL_LINK}`,
+      },
+      { quoted: m }
+    );
+  }
 }
 
-pinByAadhiCommand.command = ['pinbyaadhi'];
-pinByAadhiCommand.description = 'Download Pinterest image or video';
-
-module.exports = pinByAadhiCommand;
+module.exports = pinByAadhiPlugin;
