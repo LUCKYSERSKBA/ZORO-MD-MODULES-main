@@ -1,5 +1,14 @@
 const settings = require("../settings");
 
+function shuffleArray(array) {
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
 async function animEditCommand(sock, chatId, message) {
     try {
         const sender = message.key.participant || message.key.remoteJid;
@@ -15,19 +24,43 @@ async function animEditCommand(sock, chatId, message) {
                      
         const cleanText = text.trim().toLowerCase();
 
-        const sadEmojis = ['😢', '😭', '💔', '🙁', '☹️', '😿', '😾', '🥺', '🥀', '🥲', '😔', '🖤'];
-        const happyEmojis = ['😀', '😃', '😄', '😁', '😆', '🥳', '😍', '✨', '🎉', '🤩', '😇', '🌝'];
+        const emojiSets = {
+            sad: {
+                emojis: ['😢', '😭', '💔', '🙁', '☹️', '😿', '😾', '🥺', '🥀', '🥲', '😔', '🖤'],
+                reaction: '😶',
+                outro: ['🥀', '🌧️', '🖤']
+            },
+            happy: {
+                emojis: ['😀', '😃', '😄', '😁', '😆', '🥳', '😍', '✨', '🎉', '🤩', '😇', '🌝'],
+                reaction: '🫣',
+                outro: ['✨', '💫', '🌟']
+            },
+            angry: {
+                emojis: ['😠', '😡', '🤬', '😤', '😒', '🙄', '😑', '💢', '🔥', '👿', '😾', '🗯️'],
+                reaction: '😤',
+                outro: ['💢', '🔥', '🤬']
+            },
+            heart: {
+                emojis: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🤎', '🖤', '🤍', '🩷', '💖', '💘'],
+                reaction: '🥰',
+                outro: ['💖', '✨', '❤️']
+            },
+            funny: {
+                emojis: ['😂', '🤣', '😹', '😜', '🤪', '😝', '🤡', '🙃', '🤭', '🐒', '🥴', '😂'],
+                reaction: '🤣',
+                outro: ['😂', '🎉', '🤣']
+            }
+        };
 
-        let selectedSequence = [];
-        let ownerReaction = '😶';
+        let matchedKey = null;
+        for (const key of Object.keys(emojiSets)) {
+            if (cleanText.includes(key)) {
+                matchedKey = key;
+                break;
+            }
+        }
 
-        if (cleanText.includes('sad')) {
-            selectedSequence = sadEmojis;
-            ownerReaction = '😶';
-        } else if (cleanText.includes('happy')) {
-            selectedSequence = happyEmojis;
-            ownerReaction = '🫣';
-        } else {
+        if (!matchedKey) {
             return;
         }
 
@@ -37,15 +70,26 @@ async function animEditCommand(sock, chatId, message) {
             return;
         }
 
-        await sock.sendMessage(chatId, { react: { text: ownerReaction, key: message.key } });
+        const currentSet = emojiSets[matchedKey];
+        const shuffledEmojis = shuffleArray(currentSet.emojis);
 
-        const sentMsg = await sock.sendMessage(chatId, { text: selectedSequence[0] }, { quoted: message });
+        await sock.sendMessage(chatId, { react: { text: currentSet.reaction, key: message.key } });
 
-        for (let i = 1; i < selectedSequence.length; i++) {
+        const sentMsg = await sock.sendMessage(chatId, { text: shuffledEmojis[0] }, { quoted: message });
+
+        for (let i = 1; i < shuffledEmojis.length; i++) {
             await new Promise(resolve => setTimeout(resolve, 700));
-
             await sock.sendMessage(chatId, {
-                text: selectedSequence[i],
+                text: shuffledEmojis[i],
+                edit: sentMsg.key
+            });
+        }
+
+        // അവസാനത്തെ ആനിമേഷൻ (Final outro sequence)
+        for (const outroEmoji of currentSet.outro) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await sock.sendMessage(chatId, {
+                text: outroEmoji,
                 edit: sentMsg.key
             });
         }
@@ -55,5 +99,5 @@ async function animEditCommand(sock, chatId, message) {
     }
 }
 
-animEditCommand.command = ['sad', 'happy'];
+animEditCommand.command = ['sad', 'happy', 'angry', 'heart', 'funny'];
 module.exports = animEditCommand;
