@@ -1,7 +1,6 @@
 const axios = require("axios");
 
-const DEMO_LINK = "https://pin.it/2Uu82fPs2";
-const DEFAULT_API = "https://xenosirapis.zone.id/api/pinterestdl";
+const DEFAULT_API = "https://xenosirapis.zone.id/api/klickpin";
 const NEWSLETTER_JID = "0029Vb7pgsF4tRrkS5CECe24@newsletter";
 const NEWSLETTER_NAME = "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂";
 const CREDIT_LINE = `> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1\n> _Crafted by Aadhi.xd乡_`;
@@ -37,10 +36,10 @@ function isValidPinUrl(text = "") {
   );
 }
 
-async function fetchBuffer(url) {
+async function fetchVideoBuffer(url) {
   const res = await axios.get(url, {
     responseType: "arraybuffer",
-    timeout: 60000,
+    timeout: 90000,
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
     headers: {
@@ -51,50 +50,99 @@ async function fetchBuffer(url) {
     },
   });
 
+  const contentType = String(res.headers["content-type"] || "").toLowerCase();
   const buffer = Buffer.from(res.data);
-  if (!buffer || buffer.length === 0) {
-    throw new Error("Empty media buffer received");
+
+  if (!buffer || buffer.length < 1024) {
+    throw new Error("Downloaded video buffer is empty or too small");
+  }
+
+  if (
+    contentType.includes("image/") ||
+    contentType.includes("text/html") ||
+    contentType.includes("application/json")
+  ) {
+    throw new Error(`Invalid video content-type received: ${contentType}`);
   }
 
   return {
     buffer,
-    contentType: (res.headers["content-type"] || "").toLowerCase(),
+    contentType: contentType.includes("video") ? contentType : "video/mp4",
   };
 }
 
-function parsePinResponse(data) {
-  const payload = data?.data && typeof data.data === "object" ? data.data : data;
+async function fetchOptionalThumbnail(url) {
+  if (!url || !String(url).startsWith("http")) return null;
+  try {
+    const res = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 20000,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Linux; Android 13; Infinix X6836) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+      },
+    });
+    const buf = Buffer.from(res.data);
+    return buf.length > 0 ? buf : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function parseKlickPinVideoResponse(data) {
+  const payload =
+    data?.data && typeof data.data === "object"
+      ? data.data
+      : data?.result && typeof data.result === "object"
+      ? data.result
+      : data;
+
   if (!payload || typeof payload !== "object") {
-    throw new Error("Invalid API response");
+    throw new Error("Invalid KlickPin API response");
   }
 
-  const rawType = String(payload.type || "").toLowerCase();
-  const videoCandidate =
+  if (payload.success === false || payload.status === false) {
+    throw new Error("KlickPin API returned unsuccessful status");
+  }
+
+  const mediaType = String(payload.type || "").toLowerCase();
+  if (mediaType && mediaType !== "video") {
+    throw new Error(`Expected video, received type: ${mediaType}`);
+  }
+
+  const videoListUrl =
+    Array.isArray(payload.videos) && payload.videos.length > 0
+      ? payload.videos.find((v) => v && typeof v.url === "string" && v.url.startsWith("http"))?.url ||
+        (typeof payload.videos[0] === "string" ? payload.videos[0] : null)
+      : null;
+
+  const videoUrl =
     payload.mp4 ||
-    (Array.isArray(payload.videos) && payload.videos[0]?.url) ||
-    (rawType === "video" ? payload.downloadUrl || payload.url || payload.video : null);
+    payload.downloadUrl ||
+    videoListUrl ||
+    (mediaType === "video" ? payload.url || payload.video : null);
 
-  const imageCandidate =
-    rawType === "image"
-      ? payload.downloadUrl || payload.image || payload.url || payload.thumbnail
-      : payload.image || payload.thumbnail;
-
-  const title = (payload.title || "Pinterest Media").trim();
-  const thumbnail = payload.thumbnail || payload.image || null;
-
-  if (rawType === "video" || videoCandidate) {
-    const mediaUrl = videoCandidate || payload.downloadUrl;
-    if (!mediaUrl) throw new Error("Missing Pinterest video URL");
-    return { kind: "video", mediaUrl, title, thumbnail };
+  if (!videoUrl || typeof videoUrl !== "string" || !videoUrl.startsWith("http")) {
+    throw new Error("Missing video URL in KlickPin response");
   }
 
-  if (rawType === "image" || imageCandidate) {
-    const mediaUrl = imageCandidate || payload.downloadUrl;
-    if (!mediaUrl) throw new Error("Missing Pinterest image URL");
-    return { kind: "image", mediaUrl, title, thumbnail };
-  }
+  const title = String(payload.title || "Pinterest Video").trim();
+  const quality = String(
+    payload.quality ||
+      (Array.isArray(payload.videos) && payload.videos[0]?.quality) ||
+      "default"
+  ).trim();
+  const thumbnail =
+    typeof payload.thumbnail === "string" && payload.thumbnail.startsWith("http")
+      ? payload.thumbnail
+      : null;
 
-  throw new Error("Unsupported Pinterest media type");
+  return {
+    videoUrl: videoUrl.trim(),
+    title,
+    quality,
+    thumbnail,
+  };
 }
 
 async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
@@ -111,7 +159,7 @@ async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
       await sock.sendMessage(
         targetChatId,
         {
-          text: `📌 *Pinterest Downloader*\n\nUsage: *.pinbyaadhi <pinterest_url>*\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          text: `📌 *Pinterest Video Downloader*\n\nUsage: *.pinbyaadhi <pinterest_video_url>*\n\n${CREDIT_LINE}`,
           contextInfo: CONTEXT_INFO,
         },
         quoteOpt
@@ -128,7 +176,7 @@ async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
       await sock.sendMessage(
         targetChatId,
         {
-          text: `❌ Invalid Pinterest URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          text: `❌ Invalid Pinterest URL.\n\n${CREDIT_LINE}`,
           contextInfo: CONTEXT_INFO,
         },
         quoteOpt
@@ -147,55 +195,30 @@ async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
       timeout: 30000,
     });
 
-    const parsed = parsePinResponse(data);
-    const { buffer, contentType } = await fetchBuffer(parsed.mediaUrl);
+    const parsed = parseKlickPinVideoResponse(data);
+    const [{ buffer, contentType }, thumbBuffer] = await Promise.all([
+      fetchVideoBuffer(parsed.videoUrl),
+      fetchOptionalThumbnail(parsed.thumbnail),
+    ]);
 
-    let thumbBuffer = null;
-    if (parsed.kind === "video" && parsed.thumbnail) {
-      try {
-        const thumbRes = await fetchBuffer(parsed.thumbnail);
-        thumbBuffer = thumbRes.buffer;
-      } catch (e) {}
-    }
-
-    const mediaLabel = parsed.kind === "video" ? "Video Reel" : "HD Image";
     const caption =
-      `◈ ━━━〔 *💗 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 𝐌𝐄𝐃𝐈𝐀* 〕━━━ ◈\n` +
-      `│ ✦ *Title* : ${parsed.title}\n` +
-      `│ ✦ *Format* : ${mediaLabel}\n` +
+      `◈ ━━━〔 *💗 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 𝐕𝐈𝐃𝐄𝐎* 〕━━━ ◈\n` +
+      `│ ✦ *Title*   : ${parsed.title}\n` +
+      `│ ✦ *Quality* : ${parsed.quality}\n` +
       `◈ ━━━━━━━━━━━━━━━━━━━━━━━━ ◈\n` +
       `${CREDIT_LINE}`;
 
-    if (parsed.kind === "video") {
-      await sock.sendMessage(
-        targetChatId,
-        {
-          video: buffer,
-          mimetype: contentType.includes("video") ? contentType : "video/mp4",
-          jpegThumbnail: thumbBuffer || undefined,
-          caption,
-          contextInfo: CONTEXT_INFO,
-        },
-        quoteOpt
-      );
-    } else {
-      const mime = contentType.includes("png")
-        ? "image/png"
-        : contentType.includes("webp")
-        ? "image/webp"
-        : "image/jpeg";
-
-      await sock.sendMessage(
-        targetChatId,
-        {
-          image: buffer,
-          mimetype: mime,
-          caption,
-          contextInfo: CONTEXT_INFO,
-        },
-        quoteOpt
-      );
-    }
+    await sock.sendMessage(
+      targetChatId,
+      {
+        video: buffer,
+        mimetype: contentType,
+        jpegThumbnail: thumbBuffer || undefined,
+        caption,
+        contextInfo: CONTEXT_INFO,
+      },
+      quoteOpt
+    );
 
     if (message?.key) {
       try {
@@ -203,6 +226,7 @@ async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
       } catch (e) {}
     }
   } catch (err) {
+    console.error("[pinbyaadhi error]:", err?.response?.data || err?.message || err);
     const targetChatId = chatId || message?.key?.remoteJid;
     if (!sock || !targetChatId) return;
 
@@ -214,7 +238,7 @@ async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
     await sock.sendMessage(
       targetChatId,
       {
-        text: `❌ Failed to download Pinterest media.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+        text: `❌ Failed to download Pinterest video.\n\n${CREDIT_LINE}`,
         contextInfo: CONTEXT_INFO,
       },
       message?.key ? { quoted: message } : undefined
@@ -223,6 +247,6 @@ async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
 }
 
 pinByAadhiCommand.command = ["pinbyaadhi"];
-pinByAadhiCommand.description = "Download Pinterest video or image";
+pinByAadhiCommand.description = "Download Pinterest videos only";
 
 module.exports = pinByAadhiCommand;
