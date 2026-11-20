@@ -1,152 +1,172 @@
-const axios = require('axios');
+const axios = require("axios");
 
-const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24';
-const NEWSLETTER_JID = '0029Vb7pgsF4tRrkS5CECe24@newsletter';
-const CREDIT_TEXT = '𝐁𝐲 𝐀𝐚𝐝𝐡𝐢𝐱𝐝 ㌅';
-const COMPLETE_TEXT = 'Download Completed By Zoro';
+const DEMO_LINK = "https://youtube.com/shorts/5Btds7jtJUQ";
+const CHANNEL_LINK = "https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24";
+const CREDIT = "𝐁𝐲 𝐀𝐚𝐝𝐡𝐢𝐱𝐝 ㌅";
+const FOOTER = "✅ *Download Completed By Zoro*";
 
-const processedMessages = new Set();
-
-function replaceChannelLinks(text = '') {
-    return String(text)
-        .replace(/https?:\/\/(?:www\.)?(?:whatsapp\.com\/channel\/|chat\.whatsapp\.com\/|t\.me\/|telegram\.me\/)[^\s]+/gi, CHANNEL_LINK)
-        .replace(/(?:www\.)?whatsapp\.com\/channel\/[^\s]+/gi, CHANNEL_LINK)
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+function normalizeChannelUrl(url = CHANNEL_LINK) {
+  const cleaned = String(url || CHANNEL_LINK)
+    .trim()
+    .replace(/^(https?:\/\/)+/i, "https://");
+  return cleaned.startsWith("https://") ? cleaned : `https://${cleaned}`;
 }
 
-function getRawText(message) {
-    return (
-        message?.message?.conversation?.trim() ||
-        message?.message?.extendedTextMessage?.text?.trim() ||
-        message?.message?.imageMessage?.caption?.trim() ||
-        message?.message?.videoMessage?.caption?.trim() ||
-        ''
+function isValidShortsUrl(text = "") {
+  return /^https?:\/\/((www\.|m\.)?youtube\.com\/(shorts\/[A-Za-z0-9_-]+|watch\?v=[A-Za-z0-9_-]+)|youtu\.be\/[A-Za-z0-9_-]+)/i.test(
+    text.trim()
+  );
+}
+
+async function fetchVideoBuffer(url) {
+  const res = await axios.get(url, {
+    responseType: "arraybuffer",
+    timeout: 90000,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Linux; Android 13; Infinix X6836) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+      Referer: "https://www.youtube.com/",
+      Accept: "*/*",
+    },
+  });
+
+  const contentType = String(res.headers["content-type"] || "").toLowerCase();
+  const buffer = Buffer.from(res.data);
+
+  if (!buffer || buffer.length < 1024) {
+    throw new Error("Downloaded video buffer is empty or too small");
+  }
+
+  if (contentType.includes("text/html") || contentType.includes("application/json")) {
+    throw new Error(`Invalid video content-type received: ${contentType}`);
+  }
+
+  return {
+    buffer,
+    contentType: contentType.includes("video") ? contentType : "video/mp4",
+  };
+}
+
+function parseShortsResponse(data) {
+  const payload = data?.data && typeof data.data === "object" ? data.data : data;
+  if (!payload || payload.success === false || payload.status === false) {
+    throw new Error("API returned unsuccessful status");
+  }
+
+  const downloadUrl =
+    payload.downloadUrl || payload.url || payload.video || payload.mp4;
+
+  if (!downloadUrl) {
+    throw new Error("Missing downloadUrl in YT Shorts response");
+  }
+
+  return {
+    id: payload.id || "",
+    title: String(payload.title || "YouTube Shorts").trim(),
+    duration: Number.isFinite(Number(payload.duration)) ? Number(payload.duration) : null,
+    thumbnail: payload.thumbnail || null,
+    channel: payload.channel || null,
+    shortsUrl: payload.shortsUrl || DEMO_LINK,
+    downloadUrl: String(downloadUrl).trim(),
+  };
+}
+
+async function ytsShortPlugin(sock, m, { text = "", apiEndpoint }) {
+  const input = text.trim();
+  const cleanChannel = normalizeChannelUrl(CHANNEL_LINK);
+
+  if (!input) {
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text:
+          `🎬 *YT Shorts Downloader*\n\n` +
+          `Usage: *.ytsshort <shorts_url>*\n` +
+          `Demo Link: ${DEMO_LINK}\n\n` +
+          `${CREDIT}\n${cleanChannel}`,
+      },
+      { quoted: m }
     );
-}
+    return;
+  }
 
-function getArgText(rawText = '') {
-    const parts = String(rawText).trim().split(/\s+/);
-    return parts.slice(1).join(' ').trim();
-}
-
-function extractYouTubeShortsUrl(input = '') {
-    const match = String(input).match(
-        /https?:\/\/(?:[\w-]+\.)?(?:youtube\.com\/shorts\/|youtu\.be\/|youtube\.com\/watch\?v=)[^\s]+/i
+  if (!isValidShortsUrl(input)) {
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text:
+          `❌ Invalid YouTube Shorts URL.\n` +
+          `Demo Link: ${DEMO_LINK}\n\n` +
+          `${CREDIT}\n${cleanChannel}`,
+      },
+      { quoted: m }
     );
-    return match ? match[0] : '';
-}
+    return;
+  }
 
-async function ytsShortCommand(sock, chatId, message) {
-    try {
-        if (message?.key?.id) {
-            if (processedMessages.has(message.key.id)) return;
-            processedMessages.add(message.key.id);
-            setTimeout(() => processedMessages.delete(message.key.id), 5 * 60 * 1000);
-        }
+  try {
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "🎬", key: m.key } });
 
-        const rawText = getRawText(message);
-        const argText = getArgText(rawText);
-        const shortsUrl = extractYouTubeShortsUrl(argText || rawText);
+    const { data } = await axios.get(apiEndpoint, {
+      params: { url: input },
+      timeout: 30000,
+    });
 
-        if (!shortsUrl) {
-            return await sock.sendMessage(
-                chatId,
-                {
-                    text: replaceChannelLinks(
-                        `❌ Please provide a valid YouTube Shorts link.\nExample: .ytsshort https://youtube.com/shorts/xxxxxxx\n\n${CREDIT_TEXT}\n${CHANNEL_LINK}`
-                    )
-                },
-                { quoted: message }
-            );
-        }
+    const info = parseShortsResponse(data);
+    const { buffer, contentType } = await fetchVideoBuffer(info.downloadUrl);
 
-        try {
-            await sock.sendMessage(chatId, { react: { text: '🥂', key: message.key } });
-        } catch (e) {}
+    const captionLines = [
+      `╭───「 🎬 𝐘𝐓 𝐒𝐇𝐎𝐑𝐓𝐒 」───`,
+      `│ 🎥 *${info.title}*`,
+    ];
 
-        const apiUrl = `https://xenosirapis.zone.id/api/ytshortsdl?url=${encodeURIComponent(shortsUrl)}`;
-        const { data } = await axios.get(apiUrl, { timeout: 30000 });
-
-        const mediaUrl = data?.downloadUrl || data?.result?.downloadUrl || data?.data?.downloadUrl;
-        if (!mediaUrl) {
-            try {
-                await sock.sendMessage(chatId, { react: { text: '📉', key: message.key } });
-            } catch (e) {}
-
-            return await sock.sendMessage(
-                chatId,
-                {
-                    text: replaceChannelLinks(`❌ Shorts video not found.\n\n${CREDIT_TEXT}\n${CHANNEL_LINK}`)
-                },
-                { quoted: message }
-            );
-        }
-
-        const title = replaceChannelLinks(data?.title || 'YouTube Shorts');
-        const durationLine = data?.duration ? `│ ⏱️ *${data.duration}s*\n` : '';
-        const caption = replaceChannelLinks(
-            `╭───「 🥂 𝐘𝐓 𝐒𝐇𝐎𝐑𝐓𝐒 」───\n│ 🎥 *${title}*\n${durationLine}│ ${CREDIT_TEXT}\n╰────────────────────\n${CHANNEL_LINK}`
-        );
-
-        const videoRes = await axios.get(mediaUrl, {
-            responseType: 'arraybuffer',
-            timeout: 120000
-        });
-        const videoBuffer = Buffer.from(videoRes.data);
-
-        await sock.sendMessage(
-            chatId,
-            {
-                video: videoBuffer,
-                mimetype: 'video/mp4',
-                caption,
-                contextInfo: {
-                    forwardingScore: 1,
-                    isForwarded: true,
-                    forwardedNewsletterMessageInfo: {
-                        newsletterJid: NEWSLETTER_JID,
-                        newsletterName: '𝚉𝙾𝚁𝙾 𝙼𝙳 𝚈𝚃 𝚂𝙷𝙾𝚁𝚃𝚂'
-                    }
-                }
-            },
-            { quoted: message }
-        );
-
-        await sock.sendMessage(
-            chatId,
-            {
-                text: replaceChannelLinks(`✅ *${COMPLETE_TEXT}* • ${CREDIT_TEXT}`),
-                contextInfo: {
-                    forwardingScore: 1,
-                    isForwarded: true,
-                    forwardedNewsletterMessageInfo: {
-                        newsletterJid: NEWSLETTER_JID,
-                        newsletterName: '𝚉𝙾𝚁𝙾 𝙼𝙳 𝚈𝚃 𝚂𝙷𝙾𝚁𝚃𝚂'
-                    }
-                }
-            }
-        );
-
-        try {
-            await sock.sendMessage(chatId, { react: { text: '✅', key: message.key } });
-        } catch (e) {}
-    } catch (error) {
-        try {
-            await sock.sendMessage(chatId, { react: { text: '📉', key: message.key } });
-        } catch (e) {}
-
-        await sock.sendMessage(
-            chatId,
-            {
-                text: replaceChannelLinks(`❌ Failed to download YouTube Shorts.\n\n${CREDIT_TEXT}\n${CHANNEL_LINK}`)
-            },
-            { quoted: message }
-        );
+    if (info.duration !== null) {
+      captionLines.push(`│ ⏱️ *${info.duration}s*`);
     }
+
+    if (info.channel) {
+      captionLines.push(`│ 📺 *${info.channel}*`);
+    }
+
+    captionLines.push(`│ ${CREDIT}`);
+    captionLines.push(`╰────────────────────`);
+    captionLines.push(`${cleanChannel}`);
+
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        video: buffer,
+        mimetype: contentType,
+        caption: captionLines.join("\n"),
+      },
+      { quoted: m }
+    );
+
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text: `${FOOTER} • ${CREDIT}`,
+      },
+      { quoted: m }
+    );
+
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "✅", key: m.key } });
+  } catch (err) {
+    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
+    await sock.sendMessage(
+      m.key.remoteJid,
+      {
+        text:
+          `❌ Failed to download YT Shorts video.\n` +
+          `Demo Link: ${DEMO_LINK}\n\n` +
+          `${CREDIT}\n${cleanChannel}`,
+      },
+      { quoted: m }
+    );
+  }
 }
 
-ytsShortCommand.command = ['ytsshort'];
-ytsShortCommand.description = 'Download YouTube Shorts video';
-
-module.exports = ytsShortCommand;
+module.exports = ytsShortPlugin;
