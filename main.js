@@ -39,6 +39,63 @@ const ffmpeg = require('fluent-ffmpeg');
 const { isSudo } = require('./lib/index');
 const { autoreadCommand, isAutoreadEnabled, handleAutoread } = require('./plugins/autoread');
 
+// ⚡ Performance Caches (Group Metadata, User Prefix & Message Mode)
+const groupMetaCache = new Map();
+const GROUP_META_TTL = 45 * 1000;
+
+async function getCachedGroupMetadata(sock, chatId) {
+    if (!sock?.groupMetadata || !chatId) return {};
+    const now = Date.now();
+    const cached = groupMetaCache.get(chatId);
+    if (cached && cached.expiresAt > now) {
+        return cached.data;
+    }
+    const meta = await sock.groupMetadata(chatId).catch(() => ({}));
+    groupMetaCache.set(chatId, {
+        data: meta || {},
+        expiresAt: now + GROUP_META_TTL
+    });
+    return meta || {};
+}
+
+const prefixCache = new Map();
+const PREFIX_TTL = 60 * 1000;
+
+let msgCountState = { isPublic: true };
+let msgCountDirty = false;
+const msgCountPath = path.join(process.cwd(), 'data', 'messageCount.json');
+
+function loadMessageCountState() {
+    try {
+        if (fs.existsSync(msgCountPath)) {
+            const parsed = JSON.parse(fs.readFileSync(msgCountPath, 'utf8'));
+            if (parsed && typeof parsed === 'object') {
+                msgCountState = {
+                    isPublic: typeof parsed.isPublic === 'boolean' ? parsed.isPublic : true,
+                    ...parsed
+                };
+            }
+        }
+    } catch (e) {}
+}
+
+function saveMessageCountStateNow() {
+    try {
+        const dir = path.dirname(msgCountPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(msgCountPath, JSON.stringify(msgCountState, null, 2));
+        msgCountDirty = false;
+    } catch (e) {}
+}
+
+loadMessageCountState();
+
+setInterval(() => {
+    if (msgCountDirty) {
+        saveMessageCountStateNow();
+    }
+}, 15 * 1000);
+
 // 🌟 User-Specific Prefix MongoDB Schema & Functions (Per-User Prefix Support)
 const userPrefixSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true },
@@ -48,21 +105,34 @@ const userPrefixSchema = new mongoose.Schema({
 const UserPrefix = mongoose.models.UserPrefix || mongoose.model('UserPrefix', userPrefixSchema);
 
 async function getUserPrefix(userId) {
+    if (!userId) return null;
+    const now = Date.now();
+    const cached = prefixCache.get(userId);
+    if (cached && cached.expiresAt > now) {
+        return cached.prefix;
+    }
     try {
-        const doc = await UserPrefix.findOne({ userId });
-        return doc ? doc.prefix : null;
+        const doc = await UserPrefix.findOne({ userId }).lean();
+        const prefix = doc ? doc.prefix : null;
+        prefixCache.set(userId, { prefix, expiresAt: now + PREFIX_TTL });
+        return prefix;
     } catch (e) {
-        return null;
+        return cached ? cached.prefix : null;
     }
 }
 
 async function setUserPrefix(userId, newPrefix) {
     try {
-        return await UserPrefix.findOneAndUpdate(
+        const updated = await UserPrefix.findOneAndUpdate(
             { userId },
             { prefix: newPrefix },
             { upsert: true, new: true }
         );
+        prefixCache.set(userId, {
+            prefix: newPrefix,
+            expiresAt: Date.now() + PREFIX_TTL
+        });
+        return updated;
     } catch (e) {
         console.error('Error setting user prefix:', e);
     }
@@ -75,6 +145,8 @@ const globalAllowedPrefixes = [
     "🌚", "🌷", "🪻", "🌿", "🍃",
     "🌚🍃"
 ];
+
+const sortedGlobalPrefixes = [...globalAllowedPrefixes].sort((a, b) => b.length - a.length);
 
 // Command imports
 const tagAllCommand = require('./plugins/tagall');
@@ -196,8 +268,7 @@ const obfuscateCommand = require('./plugins/obfuscate');
 const textstickerCommand = require('./plugins/textsticker');
 const picCommand = require('./plugins/pic');
 
-// ✨ 5 New Downloader & Search Plugins (By Aadhi / Zoro)
-const appleMusicCommand = require('./plugins/applemusic');
+// ✨ Downloader & Search Plugins (By Aadhi / Zoro)
 const pinByAadhiCommand = require('./plugins/pinbyaadhi');
 const ytvByAadhiCommand = require('./plugins/ytvbyaadhi');
 const ytsShortCommand = require('./plugins/ytsshort');
@@ -256,11 +327,11 @@ const channelInfo = {};
 async function handleMessages(sock, messageUpdate, printLog) {
     let chatId;
     try {
-        const { messages, type } = messageUpdate;
-        if (type !== 'notify') return;
+        const { messages, type } = messageUpdate || {};
+        if (type !== 'notify' || !Array.isArray(messages) || messages.length === 0) return;
 
         const message = messages[0];
-        if (!message?.message) return;
+        if (!message?.message || !message?.key?.remoteJid) return;
 
         await handleAutoread(sock, message);
 
@@ -275,12 +346,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         chatId = message.key.remoteJid;
         const senderId = message.key.participant || chatId;
-        const isGroup = chatId.endsWith('@g.us');
-
-        // 🌟 ഗ്രൂപ്പിൽ ആരെങ്കിലും ടാഗ് ചെയ്താൽ കമാൻഡ് ആണെങ്കിലും അല്ലെങ്കിലും ഫസ്റ്റ് ചെക്ക് ചെയ്യാൻ മെൻഷൻ ഡിറ്റക്ഷൻ ഇവിടെ നൽകിയിരിക്കുന്നു
-        if (isGroup && !message.key.fromMe) {
-            await handleMentionDetection(sock, chatId, message);
-        }
+        const isGroup = String(chatId).endsWith('@g.us');
 
         const userMessageCheck = (
             message.message?.conversation || 
@@ -294,7 +360,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
         }
 
         const senderIsSudo = await isSudo(senderId);
-        const senderNumber = senderId.split('@')[0].split(':')[0];
+        const senderNumber = String(senderId).split('@')[0].split(':')[0];
         const senderHasOwnerAccess = (message.key.fromMe || senderNumber === settings.ownerNumber || senderIsSudo);
 
         const rawText = message.message?.conversation?.trim() ||
@@ -316,8 +382,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 parsedCmd = { isCommand: true, prefixUsed: userCustomPrefix, commandName, args, rawBody: commandBody };
             }
         } else {
-            const sortedPrefixes = [...globalAllowedPrefixes].sort((a, b) => b.length - a.length);
-            for (const prefix of sortedPrefixes) {
+            for (const prefix of sortedGlobalPrefixes) {
                 if (rawText.startsWith(prefix)) {
                     const commandBody = rawText.slice(prefix.length).trim();
                     const commandName = commandBody.split(' ')[0].toLowerCase();
@@ -330,15 +395,13 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         let senderName = 'Unknown User';
         let groupName = '';
-        try {
-            if (sock.contacts && sock.contacts[senderId]) {
-                senderName = sock.contacts[senderId].name || senderName;
-            }
-            if (isGroup && sock.groupMetadata) {
-                const groupMeta = await sock.groupMetadata(chatId).catch(() => ({}));
-                groupName = groupMeta.subject || 'Unknown Group';
-            }
-        } catch (err) {}
+        if (sock.contacts && sock.contacts[senderId]) {
+            senderName = sock.contacts[senderId].name || senderName;
+        }
+        if (isGroup && printLog !== false) {
+            const groupMeta = await getCachedGroupMetadata(sock, chatId);
+            groupName = groupMeta.subject || 'Unknown Group';
+        }
 
         if (!message.key.fromMe) {
             consoleLogger.logIncomingMessage(senderId, senderName, rawText, isGroup, groupName);
@@ -358,12 +421,9 @@ async function handleMessages(sock, messageUpdate, printLog) {
             await handleAutotypingNew(sock, chatId, rawText, isGroup);
         }
 
-        try {
-            const data = JSON.parse(fs.readFileSync('./data/messageCount.json'));
-            if (!data.isPublic && !senderHasOwnerAccess) {
-                return;
-            }
-        } catch (error) {}
+        if (!msgCountState.isPublic && !senderHasOwnerAccess) {
+            return;
+        }
 
         if (isBanned(senderId) && parsedCmd.commandName !== 'unban') {
             if (Math.random() < 0.1) {
@@ -380,7 +440,10 @@ async function handleMessages(sock, messageUpdate, printLog) {
             return;
         }
 
-        if (!message.key.fromMe) incrementMessageCount(chatId, senderId);
+        if (!message.key.fromMe) {
+            incrementMessageCount(chatId, senderId);
+            msgCountDirty = true;
+        }
 
         if (isGroup && rawText) {
             await handleBadwordDetection(sock, chatId, message, rawText, senderId);
@@ -492,10 +555,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
         }
 
         switch (parsedCmd.commandName) {
-            case 'applemusic':
-                await appleMusicCommand(sock, chatId, message);
-                commandExecuted = true;
-                break;
             case 'pinbyaadhi':
                 await pinByAadhiCommand(sock, chatId, message);
                 commandExecuted = true;
@@ -617,17 +676,11 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                     await sock.sendMessage(chatId, { text: 'Only bot owner can use this command!', ...channelInfo }, { quoted: message });
                     return;
                 }
-                let data;
-                try {
-                    data = JSON.parse(fs.readFileSync('./data/messageCount.json'));
-                } catch (error) {
-                    await sock.sendMessage(chatId, { text: 'Failed to read bot mode status', ...channelInfo });
-                    return;
-                }
+                loadMessageCountState();
 
                 const action = parsedCmd.args[0]?.toLowerCase();
                 if (!action) {
-                    const currentMode = data.isPublic ? 'public' : 'private';
+                    const currentMode = msgCountState.isPublic ? 'public' : 'private';
                     await sock.sendMessage(chatId, {
                         text: `Current bot mode: *${currentMode}*\n\nUsage: .mode public/private`,
                         ...channelInfo
@@ -643,8 +696,8 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                     return;
                 }
 
-                data.isPublic = action === 'public';
-                fs.writeFileSync('./data/messageCount.json', JSON.stringify(data, null, 2));
+                msgCountState.isPublic = action === 'public';
+                saveMessageCountStateNow();
                 await sock.sendMessage(chatId, { text: `Bot is now in *${action}* mode`, ...channelInfo });
                 break;
             case 'anticall':
@@ -1180,7 +1233,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                         await handleChatbotResponse(sock, chatId, message, rawText, senderId);
                     }
                     await handleTagDetection(sock, chatId, message, senderId);
-                    // 🌟 മെൻഷൻ പ്ലഗിൻ ഡിഫോൾട്ട് കേസിൽ കൂടി ഉൾപ്പെടുത്തിയിരിക്കുന്നു
                     await handleMentionDetection(sock, chatId, message);
                 }
                 commandExecuted = false;
@@ -1188,46 +1240,45 @@ To change your bot prefix, use the command followed by your desired symbol, sing
         }
 
         async function groupJidCommand(sock, chatId, message) {
-            const groupJid = message.key.remoteJid;
-            if (!groupJid.endsWith('@g.us')) {
-                return await sock.sendMessage(chatId, { text: "❌ This command can only be used in a group." });
+            const groupJid = chatId || message?.key?.remoteJid;
+            if (!groupJid || !String(groupJid).endsWith('@g.us')) {
+                return await sock.sendMessage(chatId, { text: "❌ This command can only be used in a group." }, message?.key ? { quoted: message } : undefined);
             }
-            await sock.sendMessage(chatId, { text: `✅ Group JID: ${groupJid}` }, { quoted: message });
+            await sock.sendMessage(chatId, { text: `✅ Group JID: ${groupJid}` }, message?.key ? { quoted: message } : undefined);
         }
 
-        if (parsedCmd.isCommand) {
+        if (parsedCmd.isCommand && message?.key) {
             await addCommandReaction(sock, message);
         }
     } catch (error) {
         console.error('❌ Error in message handler:', error.message);
         if (chatId) {
-            await sock.sendMessage(chatId, {
-                text: '❌ Failed to process command!',
-                ...channelInfo
-            });
+            try {
+                await sock.sendMessage(chatId, {
+                    text: '❌ Failed to process command!',
+                    ...channelInfo
+                });
+            } catch (e) {}
         }
     }
 }
 
 async function handleGroupParticipantUpdate(sock, update) {
     try {
-        const { id, participants, action, author } = update;
-        if (!id.endsWith('@g.us')) return;
+        const { id, participants, action, author } = update || {};
+        if (!id || !String(id).endsWith('@g.us')) return;
+        groupMetaCache.delete(id);
 
-        let isPublic = true;
-        try {
-            const modeData = JSON.parse(fs.readFileSync('./data/messageCount.json'));
-            if (typeof modeData.isPublic === 'boolean') isPublic = modeData.isPublic;
-        } catch (e) {}
+        if (!msgCountState.isPublic && (action === 'promote')) {
+            return;
+        }
 
         if (action === 'promote') {
-            if (!isPublic) return;
             await handlePromotionEvent(sock, id, participants, author);
             return;
         }
 
         if (action === 'demote') {
-            if (!isPublic) return;
             await handleDemotionEvent(sock, id, participants, author);
             return;
         }
@@ -1248,8 +1299,11 @@ async function handleGroupParticipantUpdate(sock, update) {
 // 🌟 Logout / Disconnect Cleanup Handler Hook (Ensures MongoDB space is freed on session logout/disconnect)
 async function handleConnectionUpdate(sock, update) {
     try {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect } = update || {};
         if (connection === 'close') {
+            groupMetaCache.clear();
+            prefixCache.clear();
+            if (msgCountDirty) saveMessageCountStateNow();
             if (typeof cleanupOnLogout === 'function') {
                 await cleanupOnLogout(sock);
             }
