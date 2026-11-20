@@ -1,6 +1,7 @@
 const axios = require("axios");
 
 const DEMO_LINK = "https://pin.it/2Uu82fPs2";
+const DEFAULT_API = "https://xenosirapis.zone.id/api/pinterestdl";
 const NEWSLETTER_JID = "0029Vb7pgsF4tRrkS5CECe24@newsletter";
 const NEWSLETTER_NAME = "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂";
 const CREDIT_LINE = `> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1\n> _Crafted by Aadhi.xd乡_`;
@@ -15,9 +16,24 @@ const CONTEXT_INFO = {
   },
 };
 
+function getRawText(message) {
+  return (
+    message?.message?.conversation?.trim() ||
+    message?.message?.extendedTextMessage?.text?.trim() ||
+    message?.message?.imageMessage?.caption?.trim() ||
+    message?.message?.videoMessage?.caption?.trim() ||
+    ""
+  );
+}
+
+function getArgText(rawText = "") {
+  const parts = String(rawText || "").trim().split(/\s+/);
+  return parts.slice(1).join(" ").trim();
+}
+
 function isValidPinUrl(text = "") {
   return /^https?:\/\/(www\.)?(pin\.it\/[A-Za-z0-9_-]+|([a-z]{2}\.)?pinterest\.com\/pin\/[A-Za-z0-9_-]+)/i.test(
-    text.trim()
+    String(text || "").trim()
   );
 }
 
@@ -81,36 +97,50 @@ function parsePinResponse(data) {
   throw new Error("Unsupported Pinterest media type");
 }
 
-async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
-  const input = text.trim();
-
-  if (!input) {
-    await sock.sendMessage(
-      m.key.remoteJid,
-      {
-        text: `📌 *Pinterest Downloader*\n\nUsage: *.pinbyaadhi <pinterest_url>*\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
-        contextInfo: CONTEXT_INFO,
-      },
-      { quoted: m }
-    );
-    return;
-  }
-
-  if (!isValidPinUrl(input)) {
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
-    await sock.sendMessage(
-      m.key.remoteJid,
-      {
-        text: `❌ Invalid Pinterest URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
-        contextInfo: CONTEXT_INFO,
-      },
-      { quoted: m }
-    );
-    return;
-  }
-
+async function pinByAadhiCommand(sock, chatId, message, opts = {}) {
   try {
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "💗", key: m.key } });
+    const targetChatId = chatId || message?.key?.remoteJid;
+    if (!sock || !targetChatId) return;
+
+    const quoteOpt = message?.key ? { quoted: message } : undefined;
+    const rawText = getRawText(message);
+    const input = (opts?.text || getArgText(rawText) || "").trim();
+    const apiEndpoint = opts?.apiEndpoint || DEFAULT_API;
+
+    if (!input) {
+      await sock.sendMessage(
+        targetChatId,
+        {
+          text: `📌 *Pinterest Downloader*\n\nUsage: *.pinbyaadhi <pinterest_url>*\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          contextInfo: CONTEXT_INFO,
+        },
+        quoteOpt
+      );
+      return;
+    }
+
+    if (!isValidPinUrl(input)) {
+      if (message?.key) {
+        try {
+          await sock.sendMessage(targetChatId, { react: { text: "📉", key: message.key } });
+        } catch (e) {}
+      }
+      await sock.sendMessage(
+        targetChatId,
+        {
+          text: `❌ Invalid Pinterest URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          contextInfo: CONTEXT_INFO,
+        },
+        quoteOpt
+      );
+      return;
+    }
+
+    if (message?.key) {
+      try {
+        await sock.sendMessage(targetChatId, { react: { text: "💗", key: message.key } });
+      } catch (e) {}
+    }
 
     const { data } = await axios.get(apiEndpoint, {
       params: { url: input },
@@ -138,7 +168,7 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
 
     if (parsed.kind === "video") {
       await sock.sendMessage(
-        m.key.remoteJid,
+        targetChatId,
         {
           video: buffer,
           mimetype: contentType.includes("video") ? contentType : "video/mp4",
@@ -146,7 +176,7 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
           caption,
           contextInfo: CONTEXT_INFO,
         },
-        { quoted: m }
+        quoteOpt
       );
     } else {
       const mime = contentType.includes("png")
@@ -156,29 +186,43 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
         : "image/jpeg";
 
       await sock.sendMessage(
-        m.key.remoteJid,
+        targetChatId,
         {
           image: buffer,
           mimetype: mime,
           caption,
           contextInfo: CONTEXT_INFO,
         },
-        { quoted: m }
+        quoteOpt
       );
     }
 
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "✅", key: m.key } });
+    if (message?.key) {
+      try {
+        await sock.sendMessage(targetChatId, { react: { text: "✅", key: message.key } });
+      } catch (e) {}
+    }
   } catch (err) {
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
+    const targetChatId = chatId || message?.key?.remoteJid;
+    if (!sock || !targetChatId) return;
+
+    if (message?.key) {
+      try {
+        await sock.sendMessage(targetChatId, { react: { text: "📉", key: message.key } });
+      } catch (e) {}
+    }
     await sock.sendMessage(
-      m.key.remoteJid,
+      targetChatId,
       {
         text: `❌ Failed to download Pinterest media.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
         contextInfo: CONTEXT_INFO,
       },
-      { quoted: m }
+      message?.key ? { quoted: message } : undefined
     );
   }
 }
 
-module.exports = pinByAadhiPlugin;
+pinByAadhiCommand.command = ["pinbyaadhi"];
+pinByAadhiCommand.description = "Download Pinterest video or image";
+
+module.exports = pinByAadhiCommand;
