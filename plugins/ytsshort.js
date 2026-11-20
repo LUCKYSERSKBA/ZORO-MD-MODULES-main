@@ -1,6 +1,7 @@
 const axios = require("axios");
 
-const DEMO_LINK = "https://youtube.com/shorts/";
+const DEMO_LINK = "https://youtube.com/shorts/5Btds7jtJUQ";
+const DEFAULT_API = "https://xenosirapis.zone.id/api/ytshorts";
 const NEWSLETTER_JID = "0029Vb7pgsF4tRrkS5CECe24@newsletter";
 const NEWSLETTER_NAME = "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂";
 const CREDIT_LINE = `> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1\n> _Crafted by Aadhi.xd乡_`;
@@ -15,9 +16,24 @@ const CONTEXT_INFO = {
   },
 };
 
+function getRawText(message) {
+  return (
+    message?.message?.conversation?.trim() ||
+    message?.message?.extendedTextMessage?.text?.trim() ||
+    message?.message?.imageMessage?.caption?.trim() ||
+    message?.message?.videoMessage?.caption?.trim() ||
+    ""
+  );
+}
+
+function getArgText(rawText = "") {
+  const parts = String(rawText || "").trim().split(/\s+/);
+  return parts.slice(1).join(" ").trim();
+}
+
 function isValidShortsUrl(text = "") {
   return /^https?:\/\/((www\.|m\.)?youtube\.com\/(shorts\/[A-Za-z0-9_-]+|watch\?v=[A-Za-z0-9_-]+)|youtu\.be\/[A-Za-z0-9_-]+)/i.test(
-    text.trim()
+    String(text || "").trim()
   );
 }
 
@@ -94,36 +110,50 @@ function parseShortsResponse(data) {
   };
 }
 
-async function ytsShortPlugin(sock, m, { text = "", apiEndpoint }) {
-  const input = text.trim();
-
-  if (!input) {
-    await sock.sendMessage(
-      m.key.remoteJid,
-      {
-        text: `🎬 *YT Shorts Downloader*\n\nUsage: *.ytsshort <shorts_url>*\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
-        contextInfo: CONTEXT_INFO,
-      },
-      { quoted: m }
-    );
-    return;
-  }
-
-  if (!isValidShortsUrl(input)) {
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
-    await sock.sendMessage(
-      m.key.remoteJid,
-      {
-        text: `❌ Invalid YouTube Shorts URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
-        contextInfo: CONTEXT_INFO,
-      },
-      { quoted: m }
-    );
-    return;
-  }
-
+async function ytsShortCommand(sock, chatId, message, opts = {}) {
   try {
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "🎬", key: m.key } });
+    const targetChatId = chatId || message?.key?.remoteJid;
+    if (!sock || !targetChatId) return;
+
+    const quoteOpt = message?.key ? { quoted: message } : undefined;
+    const rawText = getRawText(message);
+    const input = (opts?.text || getArgText(rawText) || "").trim();
+    const apiEndpoint = opts?.apiEndpoint || DEFAULT_API;
+
+    if (!input) {
+      await sock.sendMessage(
+        targetChatId,
+        {
+          text: `🎬 *YT Shorts Downloader*\n\nUsage: *.ytsshort <shorts_url>*\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          contextInfo: CONTEXT_INFO,
+        },
+        quoteOpt
+      );
+      return;
+    }
+
+    if (!isValidShortsUrl(input)) {
+      if (message?.key) {
+        try {
+          await sock.sendMessage(targetChatId, { react: { text: "📉", key: message.key } });
+        } catch (e) {}
+      }
+      await sock.sendMessage(
+        targetChatId,
+        {
+          text: `❌ Invalid YouTube Shorts URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          contextInfo: CONTEXT_INFO,
+        },
+        quoteOpt
+      );
+      return;
+    }
+
+    if (message?.key) {
+      try {
+        await sock.sendMessage(targetChatId, { react: { text: "🎬", key: message.key } });
+      } catch (e) {}
+    }
 
     const { data } = await axios.get(apiEndpoint, {
       params: { url: input },
@@ -153,7 +183,7 @@ async function ytsShortPlugin(sock, m, { text = "", apiEndpoint }) {
     lines.push(`${CREDIT_LINE}`);
 
     await sock.sendMessage(
-      m.key.remoteJid,
+      targetChatId,
       {
         video: buffer,
         mimetype: contentType,
@@ -161,21 +191,35 @@ async function ytsShortPlugin(sock, m, { text = "", apiEndpoint }) {
         caption: lines.join("\n"),
         contextInfo: CONTEXT_INFO,
       },
-      { quoted: m }
+      quoteOpt
     );
 
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "✅", key: m.key } });
+    if (message?.key) {
+      try {
+        await sock.sendMessage(targetChatId, { react: { text: "✅", key: message.key } });
+      } catch (e) {}
+    }
   } catch (err) {
-    await sock.sendMessage(m.key.remoteJid, { react: { text: "📉", key: m.key } });
+    const targetChatId = chatId || message?.key?.remoteJid;
+    if (!sock || !targetChatId) return;
+
+    if (message?.key) {
+      try {
+        await sock.sendMessage(targetChatId, { react: { text: "📉", key: message.key } });
+      } catch (e) {}
+    }
     await sock.sendMessage(
-      m.key.remoteJid,
+      targetChatId,
       {
         text: `❌ Failed to download YT Shorts video.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
         contextInfo: CONTEXT_INFO,
       },
-      { quoted: m }
+      message?.key ? { quoted: message } : undefined
     );
   }
 }
 
-module.exports = ytsShortPlugin;
+ytsShortCommand.command = ["ytsshort"];
+ytsShortCommand.description = "Download YouTube Shorts video";
+
+module.exports = ytsShortCommand;
