@@ -1,9 +1,19 @@
 const axios = require("axios");
 
 const DEMO_LINK = "https://pin.it/2Uu82fPs2";
-const CHANNEL_LINK = "https://whatsapp.com/channel/0029Vb7pgsF4tRrkS5CECe24";
-const CREDIT = "𝐁𝐲 𝐀𝐚𝐝𝐡𝐢𝐱𝐝 ㌅";
-const FOOTER = "✅ *Download Completed By Zoro*";
+const NEWSLETTER_JID = "0029Vb7pgsF4tRrkS5CECe24@newsletter";
+const NEWSLETTER_NAME = "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂";
+const CREDIT_LINE = `> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1\n> _Crafted by Aadhi.xd乡_`;
+
+const CONTEXT_INFO = {
+  forwardingScore: 999,
+  isForwarded: true,
+  forwardedNewsletterMessageInfo: {
+    newsletterJid: NEWSLETTER_JID,
+    newsletterName: NEWSLETTER_NAME,
+    serverMessageId: 100,
+  },
+};
 
 function isValidPinUrl(text = "") {
   return /^https?:\/\/(www\.)?(pin\.it\/[A-Za-z0-9_-]+|([a-z]{2}\.)?pinterest\.com\/pin\/[A-Za-z0-9_-]+)/i.test(
@@ -54,17 +64,18 @@ function parsePinResponse(data) {
       : payload.image || payload.thumbnail;
 
   const title = (payload.title || "Pinterest Media").trim();
+  const thumbnail = payload.thumbnail || payload.image || null;
 
   if (rawType === "video" || videoCandidate) {
     const mediaUrl = videoCandidate || payload.downloadUrl;
     if (!mediaUrl) throw new Error("Missing Pinterest video URL");
-    return { kind: "video", mediaUrl, title };
+    return { kind: "video", mediaUrl, title, thumbnail };
   }
 
   if (rawType === "image" || imageCandidate) {
     const mediaUrl = imageCandidate || payload.downloadUrl;
     if (!mediaUrl) throw new Error("Missing Pinterest image URL");
-    return { kind: "image", mediaUrl, title };
+    return { kind: "image", mediaUrl, title, thumbnail };
   }
 
   throw new Error("Unsupported Pinterest media type");
@@ -77,11 +88,8 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
     await sock.sendMessage(
       m.key.remoteJid,
       {
-        text:
-          `📌 *Pinterest Downloader*\n\n` +
-          `Usage: *.pinbyaadhi <pinterest_url>*\n` +
-          `Demo Link: ${DEMO_LINK}\n\n` +
-          `${CREDIT}\n${CHANNEL_LINK}`,
+        text: `📌 *Pinterest Downloader*\n\nUsage: *.pinbyaadhi <pinterest_url>*\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+        contextInfo: CONTEXT_INFO,
       },
       { quoted: m }
     );
@@ -93,10 +101,8 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
     await sock.sendMessage(
       m.key.remoteJid,
       {
-        text:
-          `❌ Invalid Pinterest URL.\n` +
-          `Demo Link: ${DEMO_LINK}\n\n` +
-          `${CREDIT}\n${CHANNEL_LINK}`,
+        text: `❌ Invalid Pinterest URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+        contextInfo: CONTEXT_INFO,
       },
       { quoted: m }
     );
@@ -114,12 +120,21 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
     const parsed = parsePinResponse(data);
     const { buffer, contentType } = await fetchBuffer(parsed.mediaUrl);
 
+    let thumbBuffer = null;
+    if (parsed.kind === "video" && parsed.thumbnail) {
+      try {
+        const thumbRes = await fetchBuffer(parsed.thumbnail);
+        thumbBuffer = thumbRes.buffer;
+      } catch (e) {}
+    }
+
+    const mediaLabel = parsed.kind === "video" ? "Video Reel" : "HD Image";
     const caption =
-      `╭───「 💗 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 」───\n` +
-      `│ ✨ *${parsed.title}*\n` +
-      `│ ${CREDIT}\n` +
-      `╰────────────────────\n` +
-      `${CHANNEL_LINK}`;
+      `◈ ━━━〔 *💗 𝐏𝐈𝐍𝐓𝐄𝐑𝐄𝐒𝐓 𝐌𝐄𝐃𝐈𝐀* 〕━━━ ◈\n` +
+      `│ ✦ *Title* : ${parsed.title}\n` +
+      `│ ✦ *Format* : ${mediaLabel}\n` +
+      `◈ ━━━━━━━━━━━━━━━━━━━━━━━━ ◈\n` +
+      `${CREDIT_LINE}`;
 
     if (parsed.kind === "video") {
       await sock.sendMessage(
@@ -127,7 +142,9 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
         {
           video: buffer,
           mimetype: contentType.includes("video") ? contentType : "video/mp4",
+          jpegThumbnail: thumbBuffer || undefined,
           caption,
+          contextInfo: CONTEXT_INFO,
         },
         { quoted: m }
       );
@@ -144,18 +161,11 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
           image: buffer,
           mimetype: mime,
           caption,
+          contextInfo: CONTEXT_INFO,
         },
         { quoted: m }
       );
     }
-
-    await sock.sendMessage(
-      m.key.remoteJid,
-      {
-        text: `${FOOTER} • ${CREDIT}`,
-      },
-      { quoted: m }
-    );
 
     await sock.sendMessage(m.key.remoteJid, { react: { text: "✅", key: m.key } });
   } catch (err) {
@@ -163,10 +173,8 @@ async function pinByAadhiPlugin(sock, m, { text = "", apiEndpoint }) {
     await sock.sendMessage(
       m.key.remoteJid,
       {
-        text:
-          `❌ Failed to download Pinterest media.\n` +
-          `Demo Link: ${DEMO_LINK}\n\n` +
-          `${CREDIT}\n${CHANNEL_LINK}`,
+        text: `❌ Failed to download Pinterest media.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+        contextInfo: CONTEXT_INFO,
       },
       { quoted: m }
     );
