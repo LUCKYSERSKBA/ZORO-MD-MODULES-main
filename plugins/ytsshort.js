@@ -1,7 +1,7 @@
 const axios = require("axios");
 
-const DEMO_LINK = "https://youtube.com/shorts/5Btds7jtJUQ";
-const DEFAULT_API = "https://xenosirapis.zone.id/api/ytshorts";
+const DEMO_LINK = "https://youtube.com/shorts/dJXjbxbiDTk";
+const DEFAULT_API = "https://xenosirapis.zone.id/api/ytshortsdl";
 const NEWSLETTER_JID = "0029Vb7pgsF4tRrkS5CECe24@newsletter";
 const NEWSLETTER_NAME = "𝒁𝑶𝑹𝑶 𝑿𝑴𝑫 𝑶𝒇𝒇𝒊𝒄𝒊𝒂";
 const CREDIT_LINE = `> 𝒁𝑶𝑹𝑶 𝐗𝐌𝐃 ⟩ - Bᴏᴛ v0.0.1\n> _Crafted by Aadhi.xd乡_`;
@@ -58,7 +58,11 @@ async function fetchVideoBuffer(url) {
     throw new Error("Downloaded video buffer is empty or too small");
   }
 
-  if (contentType.includes("text/html") || contentType.includes("application/json")) {
+  if (
+    contentType.includes("image/") ||
+    contentType.includes("text/html") ||
+    contentType.includes("application/json")
+  ) {
     throw new Error(`Invalid video content-type received: ${contentType}`);
   }
 
@@ -69,9 +73,9 @@ async function fetchVideoBuffer(url) {
 }
 
 async function fetchOptionalThumbnail(url) {
-  if (!url) return null;
+  if (!url || !/^https?:\/\//i.test(String(url).trim())) return null;
   try {
-    const res = await axios.get(url, {
+    const res = await axios.get(String(url).trim(), {
       responseType: "arraybuffer",
       timeout: 20000,
       headers: {
@@ -86,27 +90,51 @@ async function fetchOptionalThumbnail(url) {
   }
 }
 
-function parseShortsResponse(data) {
-  const payload = data?.data && typeof data.data === "object" ? data.data : data;
-  if (!payload || payload.success === false || payload.status === false) {
-    throw new Error("API returned unsuccessful status");
+function parseYtShortsResponse(data) {
+  const payload =
+    data?.data && typeof data.data === "object"
+      ? data.data
+      : data?.result && typeof data.result === "object"
+      ? data.result
+      : data;
+
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid YT Shorts API response");
+  }
+
+  if (payload.success === false || payload.status === false) {
+    throw new Error("YT Shorts API returned unsuccessful status");
   }
 
   const downloadUrl =
-    payload.downloadUrl || payload.url || payload.video || payload.mp4;
+    payload.downloadUrl ||
+    payload.mp4 ||
+    payload.videoUrl ||
+    payload.video ||
+    payload.url;
 
-  if (!downloadUrl) {
+  if (!downloadUrl || typeof downloadUrl !== "string" || !downloadUrl.startsWith("http")) {
     throw new Error("Missing downloadUrl in YT Shorts response");
   }
 
+  const title = String(payload.title || "YouTube Shorts").trim();
+  const rawDuration = payload.duration ?? payload.lengthSeconds ?? null;
+  const duration = Number.isFinite(Number(rawDuration)) ? Number(rawDuration) : null;
+  const thumbnail =
+    typeof payload.thumbnail === "string" && payload.thumbnail.startsWith("http")
+      ? payload.thumbnail
+      : null;
+  const channel =
+    typeof payload.channel === "string" && payload.channel.trim()
+      ? payload.channel.trim()
+      : null;
+
   return {
-    id: payload.id || "",
-    title: String(payload.title || "YouTube Shorts").trim(),
-    duration: Number.isFinite(Number(payload.duration)) ? Number(payload.duration) : null,
-    thumbnail: payload.thumbnail || null,
-    channel: payload.channel || null,
-    shortsUrl: payload.shortsUrl || DEMO_LINK,
-    downloadUrl: String(downloadUrl).trim(),
+    title,
+    duration,
+    thumbnail,
+    channel,
+    downloadUrl: downloadUrl.trim(),
   };
 }
 
@@ -141,7 +169,7 @@ async function ytsShortCommand(sock, chatId, message, opts = {}) {
       await sock.sendMessage(
         targetChatId,
         {
-          text: `❌ Invalid YouTube Shorts URL.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+          text: `❌ Invalid YouTube Shorts URL.\n\n${CREDIT_LINE}`,
           contextInfo: CONTEXT_INFO,
         },
         quoteOpt
@@ -160,7 +188,7 @@ async function ytsShortCommand(sock, chatId, message, opts = {}) {
       timeout: 30000,
     });
 
-    const info = parseShortsResponse(data);
+    const info = parseYtShortsResponse(data);
     const [{ buffer, contentType }, thumbBuffer] = await Promise.all([
       fetchVideoBuffer(info.downloadUrl),
       fetchOptionalThumbnail(info.thumbnail),
@@ -200,6 +228,7 @@ async function ytsShortCommand(sock, chatId, message, opts = {}) {
       } catch (e) {}
     }
   } catch (err) {
+    console.error("[ytsshort error]:", err?.response?.data || err?.message || err);
     const targetChatId = chatId || message?.key?.remoteJid;
     if (!sock || !targetChatId) return;
 
@@ -211,7 +240,7 @@ async function ytsShortCommand(sock, chatId, message, opts = {}) {
     await sock.sendMessage(
       targetChatId,
       {
-        text: `❌ Failed to download YT Shorts video.\nDemo Link: ${DEMO_LINK}\n\n${CREDIT_LINE}`,
+        text: `❌ Failed to download YT Shorts video.\n\n${CREDIT_LINE}`,
         contextInfo: CONTEXT_INFO,
       },
       message?.key ? { quoted: message } : undefined
