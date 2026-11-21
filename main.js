@@ -58,6 +58,50 @@ async function getCachedGroupMetadata(sock, chatId) {
     return meta || {};
 }
 
+// 🔹 Helper: Unwrap ViewOnce / Ephemeral wrappers safely
+function unwrapMessageContent(msg) {
+    let curr = msg;
+    while (curr) {
+        if (curr.viewOnceMessage?.message) {
+            curr = curr.viewOnceMessage.message;
+        } else if (curr.viewOnceMessageV2?.message) {
+            curr = curr.viewOnceMessageV2.message;
+        } else if (curr.viewOnceMessageV2Extension?.message) {
+            curr = curr.viewOnceMessageV2Extension.message;
+        } else if (curr.ephemeralMessage?.message) {
+            curr = curr.ephemeralMessage.message;
+        } else {
+            break;
+        }
+    }
+    return curr;
+}
+
+// 🔹 Helper: Resolve phone/user digits even when senderId is @lid
+function resolveUserDigits(message, senderId, groupMeta) {
+    const pnCandidate =
+        message?.key?.participantPn ||
+        message?.key?.senderPn ||
+        message?.participantPn ||
+        message?.senderPn;
+
+    if (pnCandidate) {
+        return String(pnCandidate).split('@')[0].split(':')[0];
+    }
+
+    if (groupMeta?.participants && Array.isArray(groupMeta.participants)) {
+        const match = groupMeta.participants.find(
+            (p) => p.id === senderId || p.lid === senderId
+        );
+        const resolvedJid = match?.phoneNumber || match?.jid || match?.id;
+        if (resolvedJid && !String(resolvedJid).endsWith('@lid')) {
+            return String(resolvedJid).split('@')[0].split(':')[0];
+        }
+    }
+
+    return String(senderId || '').split('@')[0].split(':')[0];
+}
+
 const prefixCache = new Map();
 const PREFIX_TTL = 60 * 1000;
 
@@ -140,8 +184,8 @@ async function setUserPrefix(userId, newPrefix) {
 
 // Global Allowed Prefixes List (Default Fallback)
 const globalAllowedPrefixes = [
-    ".", ",", "/", "!", "%", "<3", 
-    "🤍", "🎀", "🐱", "🥂", "🍒", "🐦‍🔥", "🏷️", 
+    ".", ",", "/", "!", "%", "<3",
+    "🤍", "🎀", "🐱", "🥂", "🍒", "🐦‍🔥", "🏷️",
     "🌚", "🌷", "🪻", "🌿", "🍃",
     "🌚🍃"
 ];
@@ -324,6 +368,14 @@ global.ytch = "ROMEO";
 
 const channelInfo = {};
 
+async function groupJidCommand(sock, chatId, message) {
+    const groupJid = chatId || message?.key?.remoteJid;
+    if (!groupJid || !String(groupJid).endsWith('@g.us')) {
+        return await sock.sendMessage(chatId, { text: "❌ This command can only be used in a group." }, message?.key ? { quoted: message } : undefined);
+    }
+    await sock.sendMessage(chatId, { text: `✅ Group JID: ${groupJid}` }, message?.key ? { quoted: message } : undefined);
+}
+
 async function handleMessages(sock, messageUpdate, printLog) {
     let chatId;
     try {
@@ -335,9 +387,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         await handleAutoread(sock, message);
 
-        if (message.message) {
-            storeMessage(sock, message);
-        }
+        storeMessage(sock, message);
 
         if (message.message?.protocolMessage?.type === 0) {
             await handleMessageRevocation(sock, message);
@@ -348,32 +398,46 @@ async function handleMessages(sock, messageUpdate, printLog) {
         const senderId = message.key.participant || chatId;
         const isGroup = String(chatId).endsWith('@g.us');
 
+        const contentMsg = unwrapMessageContent(message.message) || message.message;
+
         const userMessageCheck = (
-            message.message?.conversation || 
-            message.message?.extendedTextMessage?.text || 
+            contentMsg?.conversation ||
+            contentMsg?.extendedTextMessage?.text ||
             ''
         ).trim();
-        
+
         if (userMessageCheck === '1' || userMessageCheck === '2') {
             await songCommand(sock, chatId, message);
             return;
         }
 
-        const senderIsSudo = await isSudo(senderId);
-        const senderNumber = String(senderId).split('@')[0].split(':')[0];
-        const senderHasOwnerAccess = (message.key.fromMe || senderNumber === settings.ownerNumber || senderIsSudo);
+        let groupMeta = {};
+        if (isGroup) {
+            groupMeta = await getCachedGroupMetadata(sock, chatId);
+        }
 
-        const rawText = message.message?.conversation?.trim() ||
-            message.message?.extendedTextMessage?.text?.trim() ||
-            message.message?.imageMessage?.caption?.trim() ||
-            message.message?.videoMessage?.caption?.trim() ||
-            '';
+        const senderIsSudo = await isSudo(senderId);
+        const senderNumber = resolveUserDigits(message, senderId, groupMeta);
+        const ownerDigits = String(settings.ownerNumber || '').replace(/\D/g, '');
+        const senderHasOwnerAccess = Boolean(
+            message.key.fromMe ||
+            (ownerDigits && senderNumber === ownerDigits) ||
+            senderIsSudo
+        );
+
+        const rawText = (
+            contentMsg?.conversation?.trim() ||
+            contentMsg?.extendedTextMessage?.text?.trim() ||
+            contentMsg?.imageMessage?.caption?.trim() ||
+            contentMsg?.videoMessage?.caption?.trim() ||
+            ''
+        );
 
         // 🌟 Strict Per-User Prefix Logic Check
         const userCustomPrefix = await getUserPrefix(senderId);
-        
+
         let parsedCmd = { isCommand: false };
-        
+
         if (userCustomPrefix) {
             if (rawText.startsWith(userCustomPrefix)) {
                 const commandBody = rawText.slice(userCustomPrefix.length).trim();
@@ -396,10 +460,11 @@ async function handleMessages(sock, messageUpdate, printLog) {
         let senderName = 'Unknown User';
         let groupName = '';
         if (sock.contacts && sock.contacts[senderId]) {
-            senderName = sock.contacts[senderId].name || senderName;
+            senderName = sock.contacts[senderId].name || sock.contacts[senderId].notify || senderName;
+        } else if (message.pushName) {
+            senderName = message.pushName;
         }
         if (isGroup && printLog !== false) {
-            const groupMeta = await getCachedGroupMetadata(sock, chatId);
             groupName = groupMeta.subject || 'Unknown Group';
         }
 
@@ -526,9 +591,9 @@ async function handleMessages(sock, messageUpdate, printLog) {
         // 🌟 .setprefix Command Handler (Per-User Storage Update)
         if (parsedCmd.isCommand && parsedCmd.commandName === 'setprefix') {
             const newPrefixArg = parsedCmd.args[0];
-            
+
             if (!newPrefixArg) {
-                const suggestionMsg = 
+                const suggestionMsg =
 `✨ *Bot Prefix Configuration* ✨
 
 Current Prefix: \`${userCustomPrefix || '.'}\`
@@ -595,21 +660,21 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 commandExecuted = true;
                 break;
             }
-            case 'kick':
-                const mentionedJidListKick = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            case 'kick': {
+                const mentionedJidListKick = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 await kickCommand(sock, chatId, senderId, mentionedJidListKick, message);
                 break;
-            case 'mute':
-                {
-                    const muteArg = parsedCmd.args[0];
-                    const muteDuration = muteArg !== undefined ? parseInt(muteArg, 10) : undefined;
-                    if (muteArg !== undefined && (isNaN(muteDuration) || muteDuration <= 0)) {
-                        await sock.sendMessage(chatId, { text: 'Please provide a valid number of minutes or use .mute with no number to mute immediately.', ...channelInfo }, { quoted: message });
-                    } else {
-                        await muteCommand(sock, chatId, senderId, message, muteDuration);
-                    }
+            }
+            case 'mute': {
+                const muteArg = parsedCmd.args[0];
+                const muteDuration = muteArg !== undefined ? parseInt(muteArg, 10) : undefined;
+                if (muteArg !== undefined && (isNaN(muteDuration) || muteDuration <= 0)) {
+                    await sock.sendMessage(chatId, { text: 'Please provide a valid number of minutes or use .mute with no number to mute immediately.', ...channelInfo }, { quoted: message });
+                } else {
+                    await muteCommand(sock, chatId, senderId, message, muteDuration);
                 }
                 break;
+            }
             case 'unmute':
                 await unmuteCommand(sock, chatId, senderId, message);
                 break;
@@ -644,23 +709,27 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 await stickerCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case 'pic':
-                const quoted = message.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            case 'pic': {
+                const quoted = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
                 await picCommand(sock, chatId, message, quoted);
                 commandExecuted = true;
                 break;
-            case 'warnings':
-                const mentionedJidListWarnings = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            }
+            case 'warnings': {
+                const mentionedJidListWarnings = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 await warningsCommand(sock, chatId, mentionedJidListWarnings, senderId);
                 break;
-            case 'warn':
-                const mentionedJidListWarn = message.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            }
+            case 'warn': {
+                const mentionedJidListWarn = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 await warnCommand(sock, chatId, senderId, mentionedJidListWarn, message);
                 break;
-            case 'tts':
+            }
+            case 'tts': {
                 const text = parsedCmd.rawBody.slice(3).trim();
                 await ttsCommand(sock, chatId, text, message);
                 break;
+            }
             case 'delete':
             case 'del':
                 await deleteCommand(sock, chatId, message, senderId);
@@ -671,7 +740,7 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'settings':
                 await settingsCommand(sock, chatId, message);
                 break;
-            case 'mode':
+            case 'mode': {
                 if (!senderHasOwnerAccess) {
                     await sock.sendMessage(chatId, { text: 'Only bot owner can use this command!', ...channelInfo }, { quoted: message });
                     return;
@@ -700,6 +769,7 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 saveMessageCountStateNow();
                 await sock.sendMessage(chatId, { text: `Bot is now in *${action}* mode`, ...channelInfo });
                 break;
+            }
             case 'anticall':
                 await anticallImproved(sock, chatId, message, parsedCmd.args.join(' '));
                 break;
@@ -770,20 +840,18 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'tagnotadmin':
                 await tagNotAdminCommand(sock, chatId, senderId, message);
                 break;
-            case 'hidetag':
-                {
-                    const messageText = rawText.slice(parsedCmd.prefixUsed.length + 7).trim();
-                    const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
-                    await hideTagCommand(sock, chatId, senderId, messageText, replyMessage, message);
-                }
+            case 'hidetag': {
+                const messageText = rawText.slice(parsedCmd.prefixUsed.length + 7).trim();
+                const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
+                await hideTagCommand(sock, chatId, senderId, messageText, replyMessage, message);
                 break;
-            case 'tag':
-                {
-                    const messageText = rawText.slice(parsedCmd.prefixUsed.length + 3).trim();
-                    const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
-                    await tagCommand(sock, chatId, senderId, messageText, replyMessage, message);
-                }
+            }
+            case 'tag': {
+                const messageText = rawText.slice(parsedCmd.prefixUsed.length + 3).trim();
+                const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
+                await tagCommand(sock, chatId, senderId, messageText, replyMessage, message);
                 break;
+            }
             case 'antilink':
                 if (!isGroup || !isBotAdmin) {
                     await sock.sendMessage(chatId, { text: 'This command requires group & bot admin privileges.', ...channelInfo }, { quoted: message });
@@ -854,11 +922,12 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 await textstickerCommand(sock, chatId, message, rawText.slice(parsedCmd.prefixUsed.length + (parsedCmd.commandName === 'textsticker' ? 11 : 12)).trim());
                 commandExecuted = true;
                 break;
-            case 'weather':
+            case 'weather': {
                 const city = parsedCmd.args.join(' ');
                 if (city) await weatherCommand(sock, chatId, message, city);
                 else await sock.sendMessage(chatId, { text: 'Please specify a city, e.g., .weather London', ...channelInfo }, { quoted: message });
                 break;
+            }
             case 'news':
                 await newsCommand(sock, chatId);
                 break;
@@ -866,25 +935,26 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'tictactoe':
                 await tictactoeCommand(sock, chatId, senderId, parsedCmd.args.join(' '));
                 break;
-            case 'move':
-                const pos = parseInt(parsedCmd.args[0]);
+            case 'move': {
+                const pos = parseInt(parsedCmd.args[0], 10);
                 if (isNaN(pos)) await sock.sendMessage(chatId, { text: 'Provide valid position.', ...channelInfo }, { quoted: message });
-                else tictactoeMove(sock, chatId, senderId, pos);
+                else await handleTicTacToeMove(sock, chatId, senderId, String(pos));
                 break;
+            }
             case 'topmembers':
-                topMembers(sock, chatId, isGroup);
+                await topMembers(sock, chatId, isGroup);
                 break;
             case 'hangman':
-                startHangman(sock, chatId);
+                await startHangman(sock, chatId);
                 break;
             case 'guess':
-                if (parsedCmd.args[0]) guessLetter(sock, chatId, parsedCmd.args[0]);
+                if (parsedCmd.args[0]) await guessLetter(sock, chatId, parsedCmd.args[0]);
                 break;
             case 'trivia':
-                startTrivia(sock, chatId);
+                await startTrivia(sock, chatId);
                 break;
             case 'answer':
-                if (parsedCmd.args.length) answerTrivia(sock, chatId, parsedCmd.args.join(' '));
+                if (parsedCmd.args.length) await answerTrivia(sock, chatId, parsedCmd.args.join(' '));
                 break;
             case 'compliment':
                 await complimentCommand(sock, chatId, message);
@@ -916,10 +986,10 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 if (isGroup) await clearCommand(sock, chatId, senderId, message);
                 break;
             case 'promote':
-                await promoteCommand(sock, chatId, message.message.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
+                await promoteCommand(sock, chatId, message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
                 break;
             case 'demote':
-                await demoteCommand(sock, chatId, message.message.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
+                await demoteCommand(sock, chatId, message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
                 break;
             case 'ping':
                 await pingCommand(sock, chatId, message);
@@ -1185,14 +1255,13 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'facepalm':
             case 'face-palm':
             case 'animuquote':
-            case 'loli':
-                {
-                    let sub = parsedCmd.commandName;
-                    if (sub === 'facepalm') sub = 'face-palm';
-                    if (sub === 'animuquote') sub = 'quote';
-                    await animeCommand(sock, chatId, message, [sub]);
-                }
+            case 'loli': {
+                let sub = parsedCmd.commandName;
+                if (sub === 'facepalm') sub = 'face-palm';
+                if (sub === 'animuquote') sub = 'quote';
+                await animeCommand(sock, chatId, message, [sub]);
                 break;
+            }
             case 'crop':
                 await stickercropCommand(sock, chatId, message);
                 commandExecuted = true;
@@ -1214,7 +1283,7 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'removebg':
             case 'rmbg':
             case 'nobg':
-                removebgCommand.exec(sock, message, parsedCmd.args);
+                await removebgCommand.exec(sock, message, parsedCmd.args);
                 break;
             case 'remini':
             case 'enhance':
@@ -1239,14 +1308,6 @@ To change your bot prefix, use the command followed by your desired symbol, sing
                 break;
         }
 
-        async function groupJidCommand(sock, chatId, message) {
-            const groupJid = chatId || message?.key?.remoteJid;
-            if (!groupJid || !String(groupJid).endsWith('@g.us')) {
-                return await sock.sendMessage(chatId, { text: "❌ This command can only be used in a group." }, message?.key ? { quoted: message } : undefined);
-            }
-            await sock.sendMessage(chatId, { text: `✅ Group JID: ${groupJid}` }, message?.key ? { quoted: message } : undefined);
-        }
-
         if (parsedCmd.isCommand && message?.key) {
             await addCommandReaction(sock, message);
         }
@@ -1269,7 +1330,7 @@ async function handleGroupParticipantUpdate(sock, update) {
         if (!id || !String(id).endsWith('@g.us')) return;
         groupMetaCache.delete(id);
 
-        if (!msgCountState.isPublic && (action === 'promote')) {
+        if (!msgCountState.isPublic && action === 'promote') {
             return;
         }
 
@@ -1296,7 +1357,7 @@ async function handleGroupParticipantUpdate(sock, update) {
     }
 }
 
-// 🌟 Logout / Disconnect Cleanup Handler Hook (Ensures MongoDB space is freed on session logout/disconnect)
+// 🌟 Logout / Disconnect Cleanup Handler Hook (Ensures MongoDB space is freed on session logout)
 async function handleConnectionUpdate(sock, update) {
     try {
         const { connection, lastDisconnect } = update || {};
@@ -1304,7 +1365,13 @@ async function handleConnectionUpdate(sock, update) {
             groupMetaCache.clear();
             prefixCache.clear();
             if (msgCountDirty) saveMessageCountStateNow();
-            if (typeof cleanupOnLogout === 'function') {
+
+            const statusCode =
+                lastDisconnect?.error?.output?.statusCode ||
+                lastDisconnect?.error?.statusCode;
+            const isLoggedOut = statusCode === 401;
+
+            if (isLoggedOut && typeof cleanupOnLogout === 'function') {
                 await cleanupOnLogout(sock);
             }
         }
