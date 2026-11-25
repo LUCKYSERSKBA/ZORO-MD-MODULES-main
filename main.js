@@ -321,6 +321,7 @@ const pinHuntCommand = require('./plugins/pinhunt');
 const stiCommand = require('./plugins/sti');
 const m4aCommand = require('./plugins/m4a');
 const shazamCommand = require('./plugins/shazam');
+const bugTemplateCommand = require('./plugins/bugtemplate');
 
 const {
     bassCommand,
@@ -648,6 +649,10 @@ To change your bot prefix, use the command followed by your desired symbol, sing
             case 'find':
             case 'whatsong':
                 await shazamCommand(sock, chatId, message);
+                commandExecuted = true;
+                break;
+            case 'bugtest':
+                await bugTemplateCommand(sock, chatId, message, parsedCmd.args);
                 commandExecuted = true;
                 break;
             case 'simage': {
